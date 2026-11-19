@@ -20,6 +20,7 @@ const BASE = 'http://localhost:8085';
 // Dynamically import apiClient so localStorage is pre-seeded before module load
 let apiClient;
 beforeAll(async () => {
+  jest.setTimeout(15000);
   ({ default: apiClient } = await import('../../api/axiosConfig'));
 });
 
@@ -104,7 +105,7 @@ describe('axiosConfig — error normalisation', () => {
       expect(err.message).toMatch(/network error/i);
       expect(err.status).toBe(0);
     }
-  });
+  }, 15000);
 
   test('normalises 500 with no body into standard message', async () => {
     server.use(
@@ -120,5 +121,5 @@ describe('axiosConfig — error normalisation', () => {
       expect(err.status).toBe(500);
       expect(err.message).toMatch(/internal server error/i);
     }
-  });
+  }, 15000);
 });

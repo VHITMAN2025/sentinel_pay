@@ -56,11 +56,77 @@ spring:
           filters:
             - StripPrefix=0
 
-        # Bank balance only (PROTECTED) — internal endpoints NOT exposed externally
+        # Razorpay payment verification + webhook (PUBLIC — browser redirect target)
+        # POST /api/razorpay/verify is called by payment.html form after Razorpay widget.
+        # POST /api/razorpay/webhook is called by Razorpay servers — no JWT available.
+        - id: razorpay-verify
+          uri: ${FRAUD_SERVICE_URL}
+          predicates:
+            - Path=/api/razorpay/**
+          filters:
+            - StripPrefix=0
+
+        # Bank balance (PROTECTED)
         - id: bank-balance
           uri: ${BANK_SERVICE_URL}
           predicates:
             - Path=/bank/balance
+          filters:
+            - StripPrefix=0
+
+        # Bank UPI PIN management (PROTECTED)
+        - id: bank-pin
+          uri: ${BANK_SERVICE_URL}
+          predicates:
+            - Path=/bank/pin/**
+          filters:
+            - StripPrefix=0
+
+        # Authenticated user's own persisted bank ledger
+        - id: bank-transactions
+          uri: ${BANK_SERVICE_URL}
+          predicates:
+            - Path=/bank/transactions
+          filters:
+            - StripPrefix=0
+
+        # Bank account lookup by UPI ID (PROTECTED) — payee resolution for UPI payments
+        - id: bank-account-by-upi
+          uri: ${BANK_SERVICE_URL}
+          predicates:
+            - Path=/bank/account/by-upi/**
+          filters:
+            - StripPrefix=0
+
+        # Admin User Management (PROTECTED - karthik@gmail.com only)
+        - id: admin-users
+          uri: ${AUTH_SERVICE_URL}
+          predicates:
+            - Path=/api/admin/users/**
+          filters:
+            - StripPrefix=0
+
+        # Admin Bank Operations (PROTECTED - karthik@gmail.com only)
+        - id: admin-bank
+          uri: ${BANK_SERVICE_URL}
+          predicates:
+            - Path=/api/admin/bank/**
+          filters:
+            - StripPrefix=0
+
+        # Admin Fraud & Risk Operations (PROTECTED - karthik@gmail.com only)
+        - id: admin-fraud
+          uri: ${FRAUD_SERVICE_URL}
+          predicates:
+            - Path=/api/admin/fraud/**
+          filters:
+            - StripPrefix=0
+
+        # Admin System Operations (PROTECTED - karthik@gmail.com only)
+        - id: admin-system
+          uri: ${FRAUD_SERVICE_URL}
+          predicates:
+            - Path=/api/admin/system/**
           filters:
             - StripPrefix=0
 

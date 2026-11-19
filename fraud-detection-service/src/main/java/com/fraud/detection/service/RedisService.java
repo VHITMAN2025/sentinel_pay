@@ -6,8 +6,10 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.fraud.common.dto.FraudResult;
 import com.fraud.common.dto.TransactionEvent;
 import com.fraud.detection.config.FraudRulesProperties;
+import com.fraud.detection.dto.PendingReviewTransactionResponse;
 import com.fraud.detection.model.PaymentRecord;
 import com.fraud.detection.model.PaymentStatus;
+import com.fraud.detection.model.ReviewDecision;
 import com.fraud.detection.model.UserTransactionHistory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,8 +18,14 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -59,8 +67,12 @@ public class RedisService {
     private static final String HISTORY_KEY_PREFIX  = "user:";
     private static final String HISTORY_KEY_SUFFIX  = ":history";
     private static final String RESULT_KEY_PREFIX   = "fraud:result:";
+    private static final String REVIEW_KEY_PREFIX   = "fraud:review:";
+    private static final String REVIEW_EVENT_PREFIX = "fraud:review:event:";
+    private static final String REVIEW_LOCK_PREFIX  = "fraud:review:approval-lock:";
     private static final String PAYMENT_KEY_PREFIX  = "payment:record:";
     private static final String TIMELINE_KEY_PREFIX = "tx:timeline:";
+    private static final String PAYEE_STATS_PREFIX  = "payee:stats:";
 
     private static final long HISTORY_TTL_HOURS = 24;
 
@@ -226,6 +238,106 @@ public class RedisService {
             log.warn("[REDIS][RESULT] hasKey failed for txId={} — assuming absent", transactionId);
             return false;
         }
+    }
+
+    public ReviewDecision getReviewDecision(String transactionId) {
+        String key = REVIEW_KEY_PREFIX + transactionId;
+        try {
+            Object cached = redisTemplate.opsForValue().get(key);
+            return cached == null ? null : objectMapper.convertValue(cached, ReviewDecision.class);
+        } catch (Exception e) {
+            log.error("[REDIS][REVIEW] Read failed for txId={} — {}", transactionId, e.getMessage(), e);
+            throw new IllegalStateException("Unable to read review decision", e);
+        }
+    }
+
+    public ReviewDecision saveReviewDecision(ReviewDecision decision) {
+        String key = REVIEW_KEY_PREFIX + decision.getTransactionId();
+        long ttlHours = fraudRules.getResultTtlHours();
+        try {
+            Boolean created = redisTemplate.opsForValue().setIfAbsent(
+                    key, decision, ttlHours, TimeUnit.HOURS);
+            if (Boolean.TRUE.equals(created)) {
+                return decision;
+            }
+            ReviewDecision existing = getReviewDecision(decision.getTransactionId());
+            if (existing != null
+                    && existing.getDecision() == ReviewDecision.Decision.CONFIRM
+                    && decision.getDecision() == ReviewDecision.Decision.APPROVE) {
+                redisTemplate.opsForValue().set(key, decision, ttlHours, TimeUnit.HOURS);
+                return decision;
+            }
+            return existing;
+        } catch (Exception e) {
+            log.error("[REDIS][REVIEW] Write failed for txId={} — {}",
+                    decision.getTransactionId(), e.getMessage(), e);
+            throw new IllegalStateException("Unable to save review decision", e);
+        }
+    }
+
+    public void saveReviewTransaction(TransactionEvent event) {
+        String key = REVIEW_EVENT_PREFIX + event.getTransactionId();
+        redisTemplate.opsForValue().set(
+                key, event, fraudRules.getResultTtlHours(), TimeUnit.HOURS);
+    }
+
+    public TransactionEvent getReviewTransaction(String transactionId) {
+        Object cached = redisTemplate.opsForValue().get(REVIEW_EVENT_PREFIX + transactionId);
+        return cached == null ? null : objectMapper.convertValue(cached, TransactionEvent.class);
+    }
+
+    public List<PendingReviewTransactionResponse> getPendingReviewTransactions(String userId) {
+        UserTransactionHistory history = getHistory(userId);
+        if (history == null || history.getRecentTransactions() == null) {
+            return Collections.emptyList();
+        }
+
+        List<PendingReviewTransactionResponse> pending = new ArrayList<>();
+        for (TransactionEvent event : history.getRecentTransactions()) {
+            if (event == null || event.getTransactionId() == null
+                    || event.getPayeeUpiId() == null || event.getPayeeUpiId().isBlank()) {
+                continue;
+            }
+            String payerId = event.getPayerUserId() != null
+                    ? event.getPayerUserId() : event.getUserId();
+            if (payerId == null || !userId.equalsIgnoreCase(payerId)) {
+                continue;
+            }
+
+            FraudResult result = getFraudResult(event.getTransactionId());
+            if (result == null || result.getStatus() != FraudResult.FraudStatus.REVIEW
+                    || getReviewDecision(event.getTransactionId()) != null) {
+                continue;
+            }
+
+            pending.add(PendingReviewTransactionResponse.builder()
+                    .transactionId(event.getTransactionId())
+                    .amount(event.getAmount())
+                    .payeeUpiId(event.getPayeeUpiId())
+                    .paymentMode(event.getPaymentMode())
+                    .location(event.getLocation())
+                    .device(event.getDevice())
+                    .merchantCategory(event.getMerchantCategory())
+                    .confidenceScore(result.getConfidenceScore())
+                    .detectionLayer(result.getDetectionLayer())
+                    .reason(result.getReason())
+                    .submittedAt(event.getTimestamp())
+                    .build());
+        }
+        pending.sort(Comparator.comparing(
+                PendingReviewTransactionResponse::getSubmittedAt,
+                Comparator.nullsLast(Comparator.reverseOrder())));
+        return pending;
+    }
+
+    public boolean acquireReviewApprovalLock(String transactionId) {
+        Boolean acquired = redisTemplate.opsForValue().setIfAbsent(
+                REVIEW_LOCK_PREFIX + transactionId, "PROCESSING", 5, TimeUnit.MINUTES);
+        return Boolean.TRUE.equals(acquired);
+    }
+
+    public void releaseReviewApprovalLock(String transactionId) {
+        redisTemplate.delete(REVIEW_LOCK_PREFIX + transactionId);
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -474,5 +586,243 @@ public class RedisService {
         record.setCompensationReason(reason);
 
         savePaymentRecord(record);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    //  NAMESPACE 4 — Admin Controls (Blocklist, Rules, Audit, Stats)
+    // ══════════════════════════════════════════════════════════════════════
+
+    private static final String BLOCKLIST_KEY     = "admin:blocklist";
+    private static final String DYNAMIC_RULES_KEY = "admin:fraud:rules";
+    private static final String AUDIT_LOGS_KEY    = "admin:audit:logs";
+
+    public void addToBlocklist(String item, String type, String reason) {
+        try {
+            Map<String, String> data = new LinkedHashMap<>();
+            data.put("item", item);
+            data.put("type", type);
+            data.put("reason", reason);
+            data.put("addedAt", LocalDateTime.now().toString());
+            redisTemplate.opsForHash().put(BLOCKLIST_KEY, item, objectMapper.writeValueAsString(data));
+            recordAdminAudit("BLOCKLIST_ADD", item, "Added to blocklist: " + reason);
+        } catch (Exception e) {
+            log.error("[REDIS][ADMIN] Failed to add {} to blocklist", item, e);
+        }
+    }
+
+    public void removeFromBlocklist(String item) {
+        try {
+            redisTemplate.opsForHash().delete(BLOCKLIST_KEY, item);
+            recordAdminAudit("BLOCKLIST_REMOVE", item, "Removed from blocklist");
+        } catch (Exception e) {
+            log.error("[REDIS][ADMIN] Failed to remove {} from blocklist", item, e);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    public List<Map<String, String>> getBlocklist() {
+        List<Map<String, String>> list = new ArrayList<>();
+        try {
+            Map<Object, Object> entries = redisTemplate.opsForHash().entries(BLOCKLIST_KEY);
+            for (Object val : entries.values()) {
+                if (val != null) {
+                    list.add(objectMapper.readValue(val.toString(), Map.class));
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[REDIS][ADMIN] Failed to read blocklist: {}", e.getMessage());
+        }
+        return list;
+    }
+
+    public boolean isBlocklisted(String item) {
+        if (item == null || item.isBlank()) return false;
+        try {
+            return Boolean.TRUE.equals(redisTemplate.opsForHash().hasKey(BLOCKLIST_KEY, item));
+        } catch (Exception e) {
+            log.warn("[REDIS][ADMIN] Blocklist check error for {}: {}", item, e.getMessage());
+            return false;
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> getDynamicRules() {
+        Map<String, Object> rules = new LinkedHashMap<>();
+        try {
+            Object raw = redisTemplate.opsForValue().get(DYNAMIC_RULES_KEY);
+            if (raw != null) {
+                rules = objectMapper.readValue(raw.toString(), Map.class);
+            }
+        } catch (Exception e) {
+            log.warn("[REDIS][ADMIN] Could not read dynamic rules, returning defaults: {}", e.getMessage());
+        }
+
+        if (rules.isEmpty()) {
+            rules.put("highAmountThreshold", fraudRules.getHighAmountThreshold());
+            rules.put("highRiskScoreCutoff", 0.70);
+            rules.put("reviewScoreCutoff", 0.40);
+            rules.put("maxTxPerMinute", 5);
+            rules.put("ruleEngineEnabled", true);
+            rules.put("mlModelEnabled", true);
+            rules.put("geminiAiEnabled", true);
+        }
+        return rules;
+    }
+
+    public void updateDynamicRules(Map<String, Object> rules) {
+        try {
+            String json = objectMapper.writeValueAsString(rules);
+            redisTemplate.opsForValue().set(DYNAMIC_RULES_KEY, json);
+            recordAdminAudit("RULES_UPDATE", "FraudRules", "Updated fraud detection thresholds");
+        } catch (Exception e) {
+            log.error("[REDIS][ADMIN] Failed to update dynamic rules", e);
+        }
+    }
+
+    public void recordAdminAudit(String action, String target, String details) {
+        try {
+            Map<String, String> entry = new LinkedHashMap<>();
+            entry.put("id", UUID.randomUUID().toString());
+            entry.put("action", action);
+            entry.put("target", target);
+            entry.put("details", details);
+            entry.put("timestamp", LocalDateTime.now().toString());
+            redisTemplate.opsForList().leftPush(AUDIT_LOGS_KEY, objectMapper.writeValueAsString(entry));
+            redisTemplate.opsForList().trim(AUDIT_LOGS_KEY, 0, 99);
+        } catch (Exception e) {
+            log.warn("[REDIS][ADMIN] Failed to record admin audit: {}", e.getMessage());
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    public List<Map<String, String>> getAdminAuditLogs() {
+        List<Map<String, String>> logs = new ArrayList<>();
+        try {
+            List<Object> raw = redisTemplate.opsForList().range(AUDIT_LOGS_KEY, 0, 49);
+            if (raw != null) {
+                for (Object item : raw) {
+                    logs.add(objectMapper.readValue(item.toString(), Map.class));
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[REDIS][ADMIN] Failed to read audit logs: {}", e.getMessage());
+        }
+        return logs;
+    }
+
+    public List<FraudResult> getAllRecentFraudResults() {
+        List<FraudResult> results = new ArrayList<>();
+        try {
+            Set<String> keys = redisTemplate.keys(RESULT_KEY_PREFIX + "*");
+            if (keys != null) {
+                for (String key : keys) {
+                    if (results.size() >= 100) break;
+                    try {
+                        Object val = redisTemplate.opsForValue().get(key);
+                        if (val != null) {
+                            results.add(objectMapper.convertValue(val, FraudResult.class));
+                        }
+                    } catch (Exception ignored) {}
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[REDIS][ADMIN] Error querying recent fraud results: {}", e.getMessage());
+        }
+        return results;
+    }
+
+    public List<PendingReviewTransactionResponse> getAllPendingReviewTransactions() {
+        List<PendingReviewTransactionResponse> allPending = new ArrayList<>();
+        try {
+            Set<String> keys = redisTemplate.keys(REVIEW_EVENT_PREFIX + "*");
+            if (keys != null) {
+                for (String key : keys) {
+                    try {
+                        String txId = key.substring(REVIEW_EVENT_PREFIX.length());
+                        TransactionEvent event = getReviewTransaction(txId);
+                        if (event == null) continue;
+                        FraudResult result = getFraudResult(txId);
+                        ReviewDecision decision = getReviewDecision(txId);
+                        if (decision != null) continue;
+
+                        allPending.add(PendingReviewTransactionResponse.builder()
+                                .transactionId(txId)
+                                .amount(event.getAmount())
+                                .payeeUpiId(event.getPayeeUpiId())
+                                .paymentMode(event.getPaymentMode())
+                                .location(event.getLocation())
+                                .device(event.getDevice())
+                                .merchantCategory(event.getMerchantCategory())
+                                .confidenceScore(result != null ? result.getConfidenceScore() : 0.5)
+                                .detectionLayer(result != null ? result.getDetectionLayer() : "LAYER_1_RULE_ENGINE")
+                                .reason(result != null ? result.getReason() : "Awaiting manual review")
+                                .submittedAt(event.getTimestamp())
+                                .build());
+                    } catch (Exception ignored) {}
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[REDIS][ADMIN] Error querying all pending reviews: {}", e.getMessage());
+        }
+        allPending.sort(Comparator.comparing(
+                PendingReviewTransactionResponse::getSubmittedAt,
+                Comparator.nullsLast(Comparator.reverseOrder())));
+        return allPending;
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    //  NAMESPACE 5 — Payee Inflow Tracking (Cold-Start & Mule Detection)
+    // ══════════════════════════════════════════════════════════════════════
+
+    public com.fraud.detection.model.PayeeStats getPayeeStats(String payeeUpiId) {
+        if (payeeUpiId == null || payeeUpiId.isBlank()) return null;
+        String key = PAYEE_STATS_PREFIX + payeeUpiId.toLowerCase().trim();
+        try {
+            Object cached = redisTemplate.opsForValue().get(key);
+            if (cached == null) return null;
+            return objectMapper.convertValue(cached, com.fraud.detection.model.PayeeStats.class);
+        } catch (Exception e) {
+            log.warn("[REDIS][PAYEE] Failed to get stats for {}: {}", payeeUpiId, e.getMessage());
+            return null;
+        }
+    }
+
+    public com.fraud.detection.model.PayeeStats recordPayeeActivity(String payeeUpiId, java.math.BigDecimal amount) {
+        if (payeeUpiId == null || payeeUpiId.isBlank()) return null;
+        String key = PAYEE_STATS_PREFIX + payeeUpiId.toLowerCase().trim();
+        long now = System.currentTimeMillis();
+        long oneHourAgo = now - 3600_000L;
+
+        com.fraud.detection.model.PayeeStats stats = getPayeeStats(payeeUpiId);
+        if (stats == null) {
+            stats = com.fraud.detection.model.PayeeStats.builder()
+                    .payeeUpiId(payeeUpiId.toLowerCase().trim())
+                    .totalReceivedCount(1)
+                    .totalReceivedAmount(amount != null ? amount : java.math.BigDecimal.ZERO)
+                    .firstSeenTimestamp(now)
+                    .lastSeenTimestamp(now)
+                    .recentTimestamps(new ArrayList<>(List.of(now)))
+                    .build();
+        } else {
+            stats.setTotalReceivedCount(stats.getTotalReceivedCount() + 1);
+            if (amount != null) {
+                stats.setTotalReceivedAmount(
+                        (stats.getTotalReceivedAmount() != null ? stats.getTotalReceivedAmount() : java.math.BigDecimal.ZERO).add(amount));
+            }
+            stats.setLastSeenTimestamp(now);
+            if (stats.getRecentTimestamps() == null) {
+                stats.setRecentTimestamps(new ArrayList<>());
+            }
+            stats.getRecentTimestamps().add(now);
+            // Prune timestamps older than 1 hour
+            stats.getRecentTimestamps().removeIf(ts -> ts < oneHourAgo);
+        }
+
+        try {
+            redisTemplate.opsForValue().set(key, stats, 7, TimeUnit.DAYS);
+        } catch (Exception e) {
+            log.warn("[REDIS][PAYEE] Failed to record stats for {}: {}", payeeUpiId, e.getMessage());
+        }
+        return stats;
     }
 }

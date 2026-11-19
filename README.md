@@ -6,7 +6,7 @@
 
 ### AI-Powered Real-Time Fraud Detection for UPI Payments
 
-*Event-Driven Microservices · Apache Kafka · Spring AI · Spring Boot · React · Docker*
+*Event-Driven Microservices · Apache Kafka · Google Gemini · Spring Boot · React · Docker*
 
 ---
 
@@ -47,7 +47,7 @@ The platform combines:
 
 - deterministic rule evaluation,
 - Redis-backed behavioural anomaly tracking,
-- Spring AI contextual reasoning,
+- Google Gemini contextual reasoning,
 - Kafka asynchronous event orchestration,
 - and real-time user notification workflows
 
@@ -96,7 +96,7 @@ SentinelPay solves this by ensuring:
 |-------|--------|-------|----------------|
 | Layer 1 | Rule Engine | <1 ms | amount spikes, location mismatch, transaction velocity |
 | Layer 2 | Redis Behavioural Engine | <5 ms | impossible travel, device switching, repeated suspicious patterns |
-| Layer 3 | Spring AI Contextual Analysis | adaptive | unseen anomalies, semantic behavioural irregularities |
+| Layer 3 | Google Gemini contextual analysis | adaptive | unseen anomalies, semantic behavioural irregularities |
 
 Each fraud layer short-circuits on a `FRAUD` verdict to minimize latency while preserving high-confidence AI analysis for borderline transactions.
 
@@ -123,7 +123,7 @@ Kafka acts as the event backbone while Redis enables sub-millisecond behavioural
 ## ⚙️ Engineering Stack
 
 ### Backend
-`Java 17` `Spring Boot 3` `Spring Security` `Spring Cloud Gateway` `Spring AI` `Apache Kafka` `Redis` `MySQL`
+`Java 17` `Spring Boot 3` `Spring Security` `Spring Cloud Gateway` `Google Gemini API` `Apache Kafka` `Redis` `MySQL`
 
 ### Frontend
 `React 18` `Material UI` `Axios` `Recharts`
@@ -174,6 +174,8 @@ Kafka acts as the event backbone while Redis enables sub-millisecond behavioural
 - GET `/bank/balance`
 - GET `/bank/account/by-upi/{upiId}`
 
+</details>
+
 <details>
 <summary>🐳 Docker Setup</summary>
 
@@ -182,6 +184,11 @@ git clone https://github.com/thillainirmal-tech/SentinelPay.git
 cd SentinelPay
 cp .env.example .env
 docker-compose up -d --build
+```
+
+</details>
+
+---
 
 ## 🤝 Contribution Guide
 

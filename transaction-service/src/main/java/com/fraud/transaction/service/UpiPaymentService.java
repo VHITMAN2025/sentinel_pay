@@ -54,6 +54,9 @@ public class UpiPaymentService {
      */
     public String initiateUpiPayment(UpiPaymentRequest request, String payerEmail) {
 
+        // ── Pre-flight 0: UPI PIN Authorization ───────────────────────────────
+        bankValidationClient.validateUpiPin(payerEmail, request.getUpiPin());
+
         // ── Pre-flight 1: Rate limiting ────────────────────────────────────────
         if (!rateLimitService.isAllowed(payerEmail)) {
             log.warn("[UPI-SERVICE] Rate limit exceeded — payer={} payeeUpiId={}",
@@ -98,7 +101,7 @@ public class UpiPaymentService {
                 .traceId(traceId)
                 .build();
 
-        kafkaProducerService.sendTransaction(event);
+        kafkaProducerService.publishTransaction(event);
 
         log.info("[UPI-SERVICE] Payment initiated: txId={} payer={} payee={} amount={} mode={} traceId={}",
                  transactionId, payerEmail, request.getPayeeUpiId(),

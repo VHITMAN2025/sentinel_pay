@@ -86,6 +86,34 @@ public class BankAccount {
     private BigDecimal balance = new BigDecimal("10000.00");
 
     /**
+     * Account status: ACTIVE, FROZEN, or SUSPENDED.
+     */
+    @Builder.Default
+    @Column(name = "account_status", nullable = false)
+    private String accountStatus = "ACTIVE";
+
+    /**
+     * 6-digit UPI PIN for balance inquiry and payment authorization.
+     * Seeded with default "212006".
+     */
+    @Builder.Default
+    @Column(name = "upi_pin", nullable = false, length = 6)
+    private String upiPin = "212006";
+
+    /**
+     * Consecutive failed UPI PIN attempts. Reset on success.
+     */
+    @Builder.Default
+    @Column(name = "failed_pin_attempts", nullable = false)
+    private int failedPinAttempts = 0;
+
+    /**
+     * Lockout expiry after 3 consecutive wrong PIN attempts (6 hours lock).
+     */
+    @Column(name = "pin_locked_until")
+    private LocalDateTime pinLockedUntil;
+
+    /**
      * Optimistic locking — guards against ABA problems in concurrent updates.
      * The primary concurrency guard is the pessimistic write lock in the repository.
      */

@@ -26,6 +26,7 @@ public class AccountResponse {
     private String      bankName;
     private String      ifsc;
     private BigDecimal  balance;
+    private String      accountStatus;
     private LocalDateTime createdAt;
     private String      message;
 }

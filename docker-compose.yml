@@ -145,7 +145,7 @@ services:
   # ════════════════════════════════════════════════════════════
 
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v2.52.0
     container_name: fraud-prometheus
     restart: unless-stopped
     ports:
@@ -163,7 +163,7 @@ services:
       - fraud-network
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:10.4.2
     container_name: fraud-grafana
     restart: unless-stopped
     ports:
@@ -282,18 +282,19 @@ services:
       REDIS_HOST: ${REDIS_HOST}
       REDIS_PORT: ${REDIS_PORT}
       BANK_SERVICE_URL: ${BANK_SERVICE_URL}
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-1.5-flash}
       RAZORPAY_ENABLED: ${RAZORPAY_ENABLED}
       RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID}
       RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET}
       # Redirect destination after Razorpay payment verification (browser-visible URL)
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3001}
-      FRAUD_HIGH_AMOUNT_THRESHOLD: ${FRAUD_HIGH_AMOUNT_THRESHOLD}
-      FRAUD_MAX_TX_PER_DAY: ${FRAUD_MAX_TX_PER_DAY}
-      FRAUD_IMPOSSIBLE_TRAVEL_MIN: ${FRAUD_IMPOSSIBLE_TRAVEL_MIN}
-      FRAUD_REVIEW_CONF_MIN: ${FRAUD_REVIEW_CONF_MIN}
-      FRAUD_REVIEW_CONF_MAX: ${FRAUD_REVIEW_CONF_MAX}
-      FRAUD_RESULT_TTL_HOURS: ${FRAUD_RESULT_TTL_HOURS}
+      FRAUD_HIGH_AMOUNT_THRESHOLD: ${FRAUD_HIGH_AMOUNT_THRESHOLD:-10000}
+      FRAUD_MAX_TX_PER_DAY: ${FRAUD_MAX_TX_PER_DAY:-10}
+      FRAUD_IMPOSSIBLE_TRAVEL_MIN: ${FRAUD_IMPOSSIBLE_TRAVEL_MIN:-5}
+      FRAUD_REVIEW_CONF_MIN: ${FRAUD_REVIEW_CONF_MIN:-0.4}
+      FRAUD_REVIEW_CONF_MAX: ${FRAUD_REVIEW_CONF_MAX:-0.6}
+      FRAUD_RESULT_TTL_HOURS: ${FRAUD_RESULT_TTL_HOURS:-72}
     networks:
       - fraud-network
 

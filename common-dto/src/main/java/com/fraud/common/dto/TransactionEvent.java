@@ -52,7 +52,7 @@ public class TransactionEvent implements Serializable {
 
     /**
      * Optional: merchant or payment category context.
-     * Used by Spring AI for richer fraud analysis.
+     * Used by the Gemini API for richer fraud analysis.
      */
     private String merchantCategory;
 

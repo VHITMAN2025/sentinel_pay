@@ -31,13 +31,16 @@ export default function AppLayout() {
         component="main"
         sx={{
           flexGrow: 1,
+          minWidth: 0,
           pt: '64px', // Navbar height
-          pl: { md: `${DRAWER_WIDTH}px` },
+          width: { md: `calc(100% - ${DRAWER_WIDTH}px)` },
           minHeight: '100vh',
-          overflow: 'auto',
+          overflowX: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
         }}
       >
-        <Box sx={{ p: { xs: 2, sm: 3 }, maxWidth: 1400, mx: 'auto' }}>
+        <Box sx={{ p: { xs: 2, sm: 2.5, md: 3 }, width: '100%', boxSizing: 'border-box', flexGrow: 1 }}>
           <Outlet />
         </Box>
       </Box>

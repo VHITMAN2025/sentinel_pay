@@ -280,10 +280,44 @@ Authorization: Bearer eyJhbGciOiJIUzI1NiJ9...
 
 ### DELETE `/api/fraud/result/{transactionId}`
 
-Clear a fraud result from Redis to allow re-analysis (useful for REVIEW status cases).
+Delete a fraud result from Redis. This administrative/debug endpoint does not enqueue a new analysis or payment.
 
 **Response 204 No Content** (result cleared successfully).
 **Response 404 Not Found** (no result exists for this transaction ID).
+
+### GET `/api/fraud/review/{transactionId}`
+
+Get the authenticated payer's decision and the reviewed payment details. The response includes `decision: null` while the payer has not chosen an action.
+
+### GET `/api/fraud/review/pending`
+
+List the authenticated payer's recent UPI transactions that have a `REVIEW` verdict and no recorded decision. The Transactions page uses this endpoint to display accept/reject actions. Only simulated `BANK` payments can be accepted; any review can be rejected without moving funds. Hard `FRAUD` verdicts are not overrideable.
+
+### POST `/api/fraud/review/{transactionId}`
+
+Record the authenticated payer's decision. Only the payer can act on their own transaction with a REVIEW verdict.
+
+**Request body:**
+```json
+{ "decision": "APPROVE" }
+```
+
+`APPROVE` explicitly overrides the automated REVIEW hold for this transaction and attempts a simulated BANK debit/credit. A successful payment appears as a debit for the payer and a credit for the recipient. It does not change the underlying fraud verdict, and FRAUD transactions cannot be approved. `CANCEL` records that the payer does not want to proceed; no funds move. Legacy `CONFIRM` decisions are retained for compatibility but do not authorize payment.
+
+**Response 200 OK:**
+```json
+{
+  "transactionId": "transaction-uuid",
+  "userId": "payer@example.com",
+  "decision": "APPROVE",
+  "amount": 500.00,
+  "payeeUpiId": "receiver@upi",
+  "paymentStatus": "SUCCESS",
+  "decidedAt": "2026-10-04T01:19:00"
+}
+```
+
+**Response 403 Forbidden** if the caller is not the payer. **Response 409 Conflict** if the transaction is not under review or a different decision was already recorded.
 
 ---
 
@@ -303,6 +337,14 @@ Get the authenticated user's current balance. Identity comes from the JWT (X-Use
   "accountStatus": "ACTIVE"
 }
 ```
+
+---
+
+### GET `/bank/transactions`
+
+Get up to the latest 100 ledger entries for the authenticated account. The account identity is taken only from the JWT-derived `X-User-Email` header; callers cannot request another user's ledger.
+
+Each response item includes `transactionId`, `type` (`DEBIT`, `CREDIT`, or `REFUND`), `amount`, `balanceAfter`, and `appliedAt`. A payer sees a DEBIT for a completed payment; the recipient sees the corresponding CREDIT. These are persisted bank movements, so REVIEW/FRAUD attempts do not appear.
 
 ---
 

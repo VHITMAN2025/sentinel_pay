@@ -42,6 +42,10 @@ public class TransactionService {
      * @return         TransactionResponse confirming the transaction was queued
      */
     public TransactionResponse processTransaction(TransactionRequest request) {
+        if (request.getTransactionId() == null || request.getTransactionId().isBlank()) {
+            request.setTransactionId(java.util.UUID.randomUUID().toString());
+        }
+
         log.info("[TRANSACTION SERVICE] Processing transaction ID: {} for User: {}",
                 request.getTransactionId(), request.getUserId());
 

@@ -16,8 +16,8 @@ import java.util.Map;
 /**
  * BankServiceClient — REST client for fraud-detection-service → bank-service calls (Polish v3)
  *
- * All money movement goes through this client. It is invoked ONLY by
- * PaymentProcessorService, and only after a SAFE fraud verdict.
+ * All money movement goes through this client. PaymentProcessorService invokes it
+ * after a SAFE verdict or explicit payer approval of a REVIEW verdict.
  *
  * Bank Service Internal Endpoint Protection:
  *   /debit, /credit, /refund on bank-service require the header:
@@ -76,7 +76,7 @@ public class BankServiceClient {
 
     /**
      * Debit (subtract) amount from payer's account.
-     * Called ONLY after SAFE fraud verdict. Returns true on HTTP 2xx.
+     * Called after SAFE fraud verdict or explicit payer approval. Returns true on HTTP 2xx.
      * Sends X-Internal-Service header to satisfy bank-service internal endpoint protection.
      */
     public boolean debit(String userId, BigDecimal amount, String transactionId) {

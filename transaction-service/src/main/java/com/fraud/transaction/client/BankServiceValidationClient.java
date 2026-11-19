@@ -64,4 +64,72 @@ public class BankServiceValidationClient {
             return true;
         }
     }
+
+    /**
+     * Verify payer's UPI PIN with bank-service.
+     *
+     * @param payerEmail Payer's user ID / email
+     * @param upiPin 6-digit UPI PIN
+     */
+    public void validateUpiPin(String payerEmail, String upiPin) {
+        if (payerEmail == null || upiPin == null || upiPin.isBlank()) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY,
+                    "UPI PIN is required to authorize payment");
+        }
+        String url = bankServiceUrl + "/bank/pin/verify";
+        try {
+            org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+            headers.set("X-User-Email", payerEmail);
+            headers.setContentType(org.springframework.http.MediaType.APPLICATION_JSON);
+            java.util.Map<String, String> body = java.util.Map.of("upiPin", upiPin);
+            org.springframework.http.HttpEntity<java.util.Map<String, String>> requestEntity =
+                    new org.springframework.http.HttpEntity<>(body, headers);
+
+            org.springframework.http.ResponseEntity<java.util.Map> response =
+                    restTemplate.postForEntity(url, requestEntity, java.util.Map.class);
+
+            if (!response.getStatusCode().is2xxSuccessful() ||
+                    !Boolean.TRUE.equals(response.getBody() != null ? response.getBody().get("valid") : false)) {
+                String msg = response.getBody() != null && response.getBody().get("message") != null
+                        ? response.getBody().get("message").toString()
+                        : "Incorrect UPI PIN. Please try again.";
+                throw new org.springframework.web.server.ResponseStatusException(
+                        org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY, msg);
+            }
+        } catch (HttpClientErrorException.UnprocessableEntity | HttpClientErrorException.BadRequest e) {
+            String errorBody = e.getResponseBodyAsString();
+            String msg = "Incorrect UPI PIN. Please try again.";
+            try {
+                com.fasterxml.jackson.databind.JsonNode node =
+                        new com.fasterxml.jackson.databind.ObjectMapper().readTree(errorBody);
+                if (node.has("message")) {
+                    msg = node.get("message").asText();
+                }
+            } catch (Exception ignored) {}
+            log.warn("[BANK-VALIDATION] UPI PIN validation rejected for payer='{}': {}", payerEmail, msg);
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY, msg);
+        } catch (HttpClientErrorException e) {
+            log.warn("[BANK-VALIDATION] UPI PIN validation rejected for payer='{}': {}", payerEmail, e.getStatusCode());
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY,
+                    "Incorrect UPI PIN. Authorization failed.");
+        } catch (RestClientException e) {
+            log.error("[BANK-VALIDATION] bank-service unreachable during UPI PIN validation for payer='{}': {}",
+                    payerEmail, e.getMessage());
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+                    "Banking service is currently unavailable to verify UPI PIN.");
+        }
+    }
+
+    public boolean verifyUpiPin(String payerEmail, String upiPin) {
+        try {
+            validateUpiPin(payerEmail, upiPin);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
 }

@@ -5,7 +5,7 @@
 ## 1. Repository Short Description (≤160 chars)
 
 ```
-Real-time UPI fraud detection platform: Spring Boot microservices + Kafka + OpenAI GPT + React. 3-layer ML pipeline. Dockerized. Production-grade.
+Real-time UPI fraud detection platform: Spring Boot microservices + Kafka + Google Gemini + React. 3-layer fraud analysis pipeline. Dockerized. Production-grade.
 ```
 
 ---
@@ -22,7 +22,7 @@ AI-Powered Real-Time Fraud Detection for UPI Payments — Built with Event-Drive
 
 ```
 microservices  spring-boot  kafka  fraud-detection  react  docker
-spring-cloud-gateway  openai  redis  mysql  event-driven  upi-payment
+spring-cloud-gateway  google-gemini  redis  mysql  event-driven  upi-payment
 jwt-authentication  prometheus  grafana
 ```
 
@@ -34,7 +34,7 @@ jwt-authentication  prometheus  grafana
 
 **Description:**
 ```
-AI-powered UPI payment fraud detection system built with Spring Boot microservices, Apache Kafka, OpenAI GPT, and React. Features a 3-layer fraud pipeline (Rules → Behavioural Analysis → AI), real-time async polling, JWT auth, and full Docker orchestration.
+AI-powered UPI payment fraud detection system built with Spring Boot microservices, Apache Kafka, Google Gemini, and React. Features a 3-layer fraud pipeline (Rules → Behavioural Analysis → AI), real-time async polling, JWT auth, and full Docker orchestration.
 ```
 
 **Website:** *(your portfolio URL or demo link)*
@@ -57,7 +57,7 @@ AI-powered UPI payment fraud detection system built with Spring Boot microservic
 │  Subtitle: "AI-Powered Fraud Detection Platform"                 │
 │                                                                  │
 │  Center: Three pill badges in a row:                            │
-│   [⚡ Kafka]  [🤖 OpenAI GPT]  [☁ Spring Boot]                  │
+│   [⚡ Kafka]  [🤖 Google Gemini]  [☁ Spring Boot]               │
 │                                                                  │
 │  Bottom row of tech logos:                                       │
 │   React  •  MySQL  •  Redis  •  Docker  •  Prometheus            │
@@ -85,11 +85,11 @@ platform I built from scratch for UPI payments.
 Analyses every UPI transaction through a 3-layer fraud pipeline before money moves:
 → Layer 1: Rule Engine (velocity, amount thresholds, unknown locations)
 → Layer 2: Behavioural Analysis via Redis (impossible travel, device changes)
-→ Layer 3: OpenAI GPT with confidence scoring (SAFE / REVIEW / FRAUD)
+→ Layer 3: Google Gemini with confidence scoring (SAFE / REVIEW / FRAUD)
 
 𝗧𝗲𝗰𝗵 𝘀𝘁𝗮𝗰𝗸:
 • Backend: Spring Boot · Spring Cloud Gateway · Apache Kafka · Redis · MySQL
-• AI: Spring AI + OpenAI GPT-4
+• AI: Google Gemini API (default model: gemini-2.5-flash)
 • Payments: Razorpay integration + internal bank simulation
 • Frontend: React + Material UI with real-time async fraud polling
 • DevOps: Docker Compose · Prometheus · Grafana · Kafka UI
@@ -106,7 +106,7 @@ The entire system runs with a single `docker-compose up` command.
 
 🔗 GitHub: https://github.com/thillainirmal-tech/SentinelPay
 
-#SpringBoot #Kafka #Microservices #FraudDetection #OpenAI #React #Docker
+#SpringBoot #Kafka #Microservices #FraudDetection #Gemini #React #Docker
 #Java #FinTech #SoftwareEngineering #BackendDevelopment
 ```
 
@@ -120,7 +120,7 @@ The entire system runs with a single `docker-compose up` command.
 3-layer pipeline:
 → Rule engine (< 1ms)
 → Redis behavioural history
-→ OpenAI GPT confidence scoring
+→ Gemini confidence scoring
 
 Stack: Spring Boot · Kafka · React · Redis · Docker
 
@@ -138,12 +138,12 @@ Ships with Prometheus + Grafana monitoring out of the box 📊
 **Project Title:** SentinelPay — AI-Powered UPI Fraud Detection Platform
 
 **One-liner:**
-> Production-grade, event-driven microservices system that detects UPI payment fraud in real time using a 3-layer pipeline: deterministic rules, Redis behavioural history, and OpenAI GPT.
+> Production-grade, event-driven microservices system that detects UPI payment fraud in real time using a 3-layer pipeline: deterministic rules, Redis behavioural history, and Google Gemini.
 
 **Bullet points (for resume):**
 
 - Architected a **6-service Spring Boot microservices system** with Spring Cloud Gateway, JWT authentication, and distributed tracing via `X-Trace-Id` propagated across all services and Kafka messages
-- Designed a **3-layer fraud detection pipeline** combining a rule engine (< 1ms), Redis-based transaction history analysis (impossible travel, device fingerprinting), and OpenAI GPT for contextual AI scoring — producing SAFE / REVIEW / FRAUD verdicts with confidence scores
+- Designed a **3-layer fraud detection pipeline** combining a rule engine (< 1ms), Redis-based transaction history analysis (impossible travel, device fingerprinting), and Google Gemini for contextual AI scoring — producing SAFE / REVIEW / FRAUD verdicts with confidence scores
 - Implemented **Kafka async event flow** with a Dead Letter Queue, ensuring zero message loss; frontend uses HTTP 202 polling with dynamic `retryAfterSeconds` hints to avoid busy-wait
 - Built a **React frontend** with production-grade patterns: AbortController cancellation, isMountedRef unmount safety, DOMPurify XSS sanitisation, and SSE with polling fallback for live fraud alerts
 - Integrated **Razorpay payment gateway** alongside an internal bank simulation, with a compensation (rollback) flow for failed post-fraud payments
@@ -151,4 +151,4 @@ Ships with Prometheus + Grafana monitoring out of the box 📊
 - Implemented **configurable fraud thresholds** (amount limit, transaction velocity, travel time) via environment variables — no code changes or redeploys needed to tune the system
 
 **Tech stack line:**
-> Java 17 · Spring Boot 3 · Spring Cloud Gateway · Apache Kafka · Redis · MySQL 8 · OpenAI API · React 18 · Material UI · Docker · Prometheus · Grafana
+> Java 17 · Spring Boot 3 · Spring Cloud Gateway · Apache Kafka · Redis · MySQL 8 · Google Gemini API · React 18 · Material UI · Docker · Prometheus · Grafana

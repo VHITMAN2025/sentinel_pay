@@ -152,8 +152,9 @@ export const detectionLayerLabel = (layer) => {
   switch (layer) {
     case 'RULE_BASED':    return 'Rule Engine';
     case 'REDIS_HISTORY': return 'Behaviour History';
-    case 'AI':            return 'AI (GPT)';
+    case 'AI':            return 'AI (Gemini)';
     case 'AI_FALLBACK':   return 'AI Fallback';
+    case 'LOCAL_FALLBACK': return 'Local Risk Engine';
     default:              return layer || '—';
   }
 };

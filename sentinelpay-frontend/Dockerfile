@@ -9,10 +9,8 @@ RUN npm install
 COPY . .
 
 # REACT_APP_* vars are baked into the JS bundle at build time by CRA.
-# .env.production (checked into the repo) contains a real production URL and
-# takes priority over .env for `npm run build` builds. Explicitly set the var
-# here so it wins over any .env file — the browser will call localhost:3001
-# (Nginx), which proxies internally to fraud-api-gateway:8085.
+# Explicitly set the API base URL so the browser calls localhost:3001 (Nginx),
+# which proxies internally to fraud-api-gateway:8085.
 ARG  REACT_APP_API_BASE_URL=http://localhost:3001
 ENV  REACT_APP_API_BASE_URL=$REACT_APP_API_BASE_URL
 

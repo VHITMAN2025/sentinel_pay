@@ -5,6 +5,8 @@ import com.fraud.bank.entity.TransactionType;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.util.List;
+
 /**
  * BankTransactionRepository — persistence for bank ledger entries.
  *
@@ -28,4 +30,8 @@ public interface BankTransactionRepository extends JpaRepository<BankTransaction
      * @return true if the operation was already applied, false otherwise
      */
     boolean existsByTransactionIdAndType(String transactionId, TransactionType type);
+
+    List<BankTransaction> findTop100ByUserIdOrderByAppliedAtDesc(String userId);
+
+    List<BankTransaction> findTop200ByOrderByAppliedAtDesc();
 }

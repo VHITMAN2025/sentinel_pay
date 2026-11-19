@@ -43,6 +43,9 @@ import java.time.LocalDateTime;
             columnNames = {"transaction_id", "type"},
             name = "uk_bank_tx_id_type"
         )
+    },
+    indexes = {
+        @Index(name = "idx_bank_tx_user_applied_at", columnList = "user_id, applied_at")
     }
 )
 public class BankTransaction {

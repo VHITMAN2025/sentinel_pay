@@ -12,14 +12,15 @@ import org.springframework.stereotype.Service;
 import java.nio.charset.StandardCharsets;
 import java.security.Key;
 import java.util.Date;
+import java.util.List;
+import java.util.Map;
 
 /**
  * JwtService — JWT token generation and validation.
  *
  * Uses HS256 with a shared secret (must match the api-gateway secret).
  * Email is stored as the JWT subject — used by the gateway to inject X-User-Email.
- *
- * Token expiry: 24 hours (configurable via jwt.expiration-ms).
+ * Role is stored in claims for RBAC in frontend and downstream services.
  */
 @Slf4j
 @Service
@@ -31,18 +32,47 @@ public class JwtService {
     @Value("${jwt.expiration-ms:86400000}")  // default: 24 hours
     private long jwtExpirationMs;
 
+    @Value("${jwt.refresh-expiration-ms:604800000}")  // default: 7 days
+    private long refreshExpirationMs;
+
     /**
-     * Generate a signed JWT token for the given email.
-     *
-     * @param email the authenticated user's email (becomes JWT subject)
-     * @return signed JWT string
+     * Generate a signed JWT access token for the given email with role and metadata.
      */
-    public String generateToken(String email) {
+    public String generateToken(String email, String role, String name, String upiId) {
         Date now    = new Date();
         Date expiry = new Date(now.getTime() + jwtExpirationMs);
 
+        String effectiveRole = (role != null && !role.isBlank()) ? role : "ROLE_USER";
+
         return Jwts.builder()
                 .setSubject(email)
+                .claim("role", effectiveRole)
+                .claim("roles", List.of(effectiveRole))
+                .claim("name", name != null ? name : "")
+                .claim("upiId", upiId != null ? upiId : "")
+                .setIssuedAt(now)
+                .setExpiration(expiry)
+                .signWith(getSigningKey(), SignatureAlgorithm.HS256)
+                .compact();
+    }
+
+    /**
+     * Backward-compatible token generator.
+     */
+    public String generateToken(String email) {
+        return generateToken(email, "ROLE_USER", null, null);
+    }
+
+    /**
+     * Generate a signed refresh token for the given email.
+     */
+    public String generateRefreshToken(String email) {
+        Date now    = new Date();
+        Date expiry = new Date(now.getTime() + refreshExpirationMs);
+
+        return Jwts.builder()
+                .setSubject(email)
+                .claim("type", "REFRESH")
                 .setIssuedAt(now)
                 .setExpiration(expiry)
                 .signWith(getSigningKey(), SignatureAlgorithm.HS256)
@@ -51,20 +81,13 @@ public class JwtService {
 
     /**
      * Extract the email (subject) from a JWT token.
-     *
-     * @param token the raw JWT string (without "Bearer " prefix)
-     * @return email stored in the token subject
-     * @throws JwtException if the token is invalid or expired
      */
     public String extractEmail(String token) {
         return parseClaims(token).getSubject();
     }
 
     /**
-     * Validate a JWT token — checks signature and expiry.
-     *
-     * @param token the raw JWT string
-     * @return true if valid, false if invalid or expired
+     * Validate an access token.
      */
     public boolean isTokenValid(String token) {
         try {
@@ -72,6 +95,21 @@ public class JwtService {
             return !claims.getExpiration().before(new Date());
         } catch (JwtException | IllegalArgumentException e) {
             log.warn("[JWT] Token validation failed: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Validate a refresh token.
+     */
+    public boolean isRefreshTokenValid(String token) {
+        try {
+            Claims claims = parseClaims(token);
+            boolean notExpired = !claims.getExpiration().before(new Date());
+            boolean isRefreshType = "REFRESH".equals(claims.get("type"));
+            return notExpired && isRefreshType;
+        } catch (JwtException | IllegalArgumentException e) {
+            log.warn("[JWT] Refresh token validation failed: {}", e.getMessage());
             return false;
         }
     }

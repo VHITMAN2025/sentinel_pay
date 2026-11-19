@@ -55,5 +55,5 @@ Complete reference documentation for the SentinelPay platform.
 |-------|-----------|----------------|
 | `RULE_BASED` | Java in-memory | < 1ms |
 | `REDIS_HISTORY` | Redis time-series | 5–20ms |
-| `AI` | OpenAI GPT-4 | 300–800ms |
+| `AI` | Google Gemini (configurable model) | Model/API dependent |
 | `AI_FALLBACK` | Default SAFE | < 1ms |

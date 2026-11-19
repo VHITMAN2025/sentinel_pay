@@ -84,7 +84,7 @@ public class FraudRulesProperties {
     // ─── AI Review Confidence Band ──────────────────────────────────────────
 
     /**
-     * AI confidence scores within [reviewConfidenceMin, reviewConfidenceMax]
+     * Fraud-risk estimates within [reviewConfidenceMin, reviewConfidenceMax]
      * produce a REVIEW verdict instead of a hard SAFE or FRAUD.
      *
      * Transactions in this confidence band are uncertain — human review needed.

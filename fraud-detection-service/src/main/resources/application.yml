@@ -5,6 +5,10 @@ spring:
   application:
     name: fraud-detection-service
 
+gemini:
+  api-key: ${GEMINI_API_KEY:not-configured}
+  model: ${GEMINI_MODEL:gemini-1.5-flash}
+
 kafka:
   topic:
     transactions: ${KAFKA_TOPIC_TRANSACTIONS:transactions}

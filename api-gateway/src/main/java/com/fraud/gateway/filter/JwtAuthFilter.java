@@ -116,13 +116,29 @@ public class JwtAuthFilter implements GlobalFilter, Ordered {
 
         log.debug("[JWT-FILTER] ✓ Authenticated — email={} traceId={} path={}", email, traceId, path);
 
-        // 5. Inject X-User-Email + X-Trace-Id into downstream request
-        ServerHttpRequest mutatedRequest = exchange.getRequest().mutate()
-                .header("X-User-Email", email)
-                .header("X-Trace-Id", traceId)
-                .build();
+        // 4b. Strict Admin Authorization Check
+        String role = extractRoleFromToken(token);
+        if (path.startsWith("/api/admin/") || path.startsWith("/admin/")) {
+            if (!"karthik@gmail.com".equalsIgnoreCase(email) || !"ROLE_ADMIN".equals(role)) {
+                log.warn("[JWT-FILTER] FORBIDDEN admin access attempt: email={} role={} path={}", email, role, path);
+                return rejectForbidden(exchange, traceId,
+                        "Forbidden: Only karthik@gmail.com has administrative access.", path);
+            }
+        }
 
-        return chain.filter(exchange.mutate().request(mutatedRequest).build());
+        // 5. Inject X-User-Email + X-Trace-Id + X-User-Role, and sanitize headers
+        ServerHttpRequest.Builder requestBuilder = exchange.getRequest().mutate()
+                .header("X-User-Email", email)
+                .header("X-Trace-Id", traceId);
+
+        if (role != null && !role.isBlank()) {
+            requestBuilder.header("X-User-Role", role);
+        }
+
+        // Strip untrusted client-supplied internal service header
+        requestBuilder.headers(headers -> headers.remove("X-Internal-Service"));
+
+        return chain.filter(exchange.mutate().request(requestBuilder.build()).build());
     }
 
     @Override
@@ -141,13 +157,16 @@ public class JwtAuthFilter implements GlobalFilter, Ordered {
         return (existing != null && !existing.isBlank()) ? existing : UUID.randomUUID().toString();
     }
 
-    private String extractEmailFromToken(String token) {
-        Claims claims = Jwts.parserBuilder()
+    private Claims parseTokenClaims(String token) {
+        return Jwts.parserBuilder()
                 .setSigningKey(getSigningKey())
                 .build()
                 .parseClaimsJws(token)
                 .getBody();
+    }
 
+    private String extractEmailFromToken(String token) {
+        Claims claims = parseTokenClaims(token);
         if (claims.getExpiration().before(new Date())) {
             throw new JwtException("Token has expired");
         }
@@ -157,6 +176,16 @@ public class JwtAuthFilter implements GlobalFilter, Ordered {
             throw new JwtException("JWT subject (email) is missing");
         }
         return subject;
+    }
+
+    private String extractRoleFromToken(String token) {
+        try {
+            Claims claims = parseTokenClaims(token);
+            Object role = claims.get("role");
+            return role != null ? role.toString() : "ROLE_USER";
+        } catch (Exception e) {
+            return "ROLE_USER";
+        }
     }
 
     private Key getSigningKey() {
@@ -177,6 +206,25 @@ public class JwtAuthFilter implements GlobalFilter, Ordered {
         String body = String.format(
                 "{\"traceId\":\"%s\",\"timestamp\":\"%s\","
                 + "\"httpStatus\":401,\"error\":\"Unauthorized\","
+                + "\"message\":\"%s\",\"path\":\"%s\"}",
+                traceId,
+                LocalDateTime.now(),
+                message.replace("\"", "'"),
+                path);
+
+        byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+        return response.writeWith(Mono.just(response.bufferFactory().wrap(bytes)));
+    }
+
+    private Mono<Void> rejectForbidden(ServerWebExchange exchange, String traceId,
+                                        String message, String path) {
+        ServerHttpResponse response = exchange.getResponse();
+        response.setStatusCode(HttpStatus.FORBIDDEN);
+        response.getHeaders().setContentType(MediaType.APPLICATION_JSON);
+
+        String body = String.format(
+                "{\"traceId\":\"%s\",\"timestamp\":\"%s\","
+                + "\"httpStatus\":403,\"error\":\"Forbidden\","
                 + "\"message\":\"%s\",\"path\":\"%s\"}",
                 traceId,
                 LocalDateTime.now(),

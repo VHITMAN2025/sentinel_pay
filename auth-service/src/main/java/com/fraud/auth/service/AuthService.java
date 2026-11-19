@@ -15,36 +15,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * AuthService — core authentication business logic (Polish v3)
- *
- * Registration flow:
- *   1. Validate email uniqueness (pre-check + DB unique constraint safety net)
- *   2. Normalize email: lowercase + trim
- *   3. Generate unique UPI ID from name
- *   4. BCrypt-hash password
- *   5. Persist User entity (@Transactional — DB work only)
- *   6. Call bank-service to create a default bank account
- *      ↳ OUTSIDE @Transactional — HTTP call must not hold a DB connection open
- *   7. Return JWT token + user info
- *
- * Login flow:
- *   1. Normalize email
- *   2. Look up user by email
- *   3. BCrypt-verify password
- *   4. Return JWT token + user info
- *
- * ─── Identity Safety ────────────────────────────────────────────────────────
- *   Email is always normalized (lowercase + trim) before persistence or lookup.
- *   This prevents duplicate registrations that differ only in case.
- *
- * ─── @Transactional Boundary ────────────────────────────────────────────────
- *   registerUser() is called via self-injection (@Lazy) so that Spring's AOP
- *   proxy wraps the method correctly. This keeps the DB transaction strictly
- *   scoped to DB work; the bankServiceClient HTTP call runs AFTER commit.
- *
- *   registerUserInternal() is the @Transactional method — does DB work only.
- *   register() is the public entry point — calls registerUserInternal(), then
- *   bankServiceClient.createBankAccount() after the transaction commits.
+ * AuthService — core authentication business logic.
  */
 @Slf4j
 @Service
@@ -55,8 +26,6 @@ public class AuthService {
     private final JwtService        jwtService;
     private final BankServiceClient bankServiceClient;
 
-    // Self-injection via @Lazy allows calling @Transactional methods on this
-    // bean through the Spring proxy, so the transaction actually applies.
     @Lazy
     @Autowired
     private AuthService self;
@@ -73,13 +42,6 @@ public class AuthService {
 
     // ─── Register ────────────────────────────────────────────────────────────
 
-    /**
-     * Public entry point for user registration.
-     *
-     * Calls the @Transactional inner method via self-proxy, then performs the
-     * bank-service HTTP call AFTER the transaction has committed successfully.
-     * This prevents holding a DB connection open during a potentially slow HTTP call.
-     */
     public AuthResponse register(RegisterRequest request) {
         String email = request.getEmail().toLowerCase().trim();
 
@@ -91,99 +53,126 @@ public class AuthService {
         // Bank-service call runs AFTER DB transaction committed — non-fatal
         bankServiceClient.createBankAccount(email, result.upiId());
 
-        // Issue JWT
-        String token = jwtService.generateToken(email);
+        // Issue JWT access + refresh tokens
+        String token = jwtService.generateToken(email, result.role(), result.name(), result.upiId());
+        String refreshToken = jwtService.generateRefreshToken(email);
 
         return AuthResponse.builder()
                 .token(token)
+                .refreshToken(refreshToken)
                 .email(email)
                 .name(result.name())
                 .upiId(result.upiId())
+                .role(result.role())
                 .message("Registration successful")
                 .build();
     }
 
-    /**
-     * @Transactional method — performs ONLY DB operations.
-     * Called via self-proxy so the transaction boundary is correctly applied.
-     *
-     * Throws IllegalArgumentException if the email is already registered.
-     * DataIntegrityViolationException from DB unique constraint is caught and
-     * re-thrown as IllegalArgumentException for consistent error handling.
-     */
     @Transactional
     public RegistrationResult registerUserInternal(String email, String name, String rawPassword) {
-        // Pre-check (fast path — avoids unique constraint exception in the happy case)
         if (userRepository.existsByEmail(email)) {
             throw new IllegalArgumentException("Email is already registered: " + email);
         }
 
-        // Generate unique UPI ID
         String upiId = generateUniqueUpiId(name);
+        String role = "karthik@gmail.com".equalsIgnoreCase(email) ? "ROLE_ADMIN" : "ROLE_USER";
 
-        // Build and persist user
         User user = User.builder()
                 .name(name)
                 .email(email)
                 .password(passwordEncoder.encode(rawPassword))
                 .upiId(upiId)
+                .role(role)
                 .build();
 
         try {
             user = userRepository.save(user);
         } catch (DataIntegrityViolationException e) {
-            // Race condition: another request registered the same email between the
-            // existsByEmail check and the save. Treat as duplicate.
-            log.warn("[AUTH] Duplicate email on save (race condition): email={}", email);
-            throw new IllegalArgumentException("Email is already registered: " + email);
+            log.warn("[AUTH] Constraint violation on save: email={}", email);
+            if (userRepository.existsByEmail(email)) {
+                throw new IllegalArgumentException("Email is already registered: " + email);
+            }
+            throw new IllegalArgumentException("Registration failed due to a conflict. Please try again.");
         }
 
-        log.info("[AUTH] User persisted: email={} upiId={}", email, upiId);
-        return new RegistrationResult(user.getName(), upiId);
+        log.info("[AUTH] User persisted: email={} upiId={} role={}", email, upiId, role);
+        return new RegistrationResult(user.getName(), upiId, role);
     }
 
     // ─── Login ───────────────────────────────────────────────────────────────
 
-    @Transactional(readOnly = true)
+    @Transactional
     public AuthResponse login(LoginRequest request) {
         String email = request.getEmail().toLowerCase().trim();
 
-        // 1. Look up user — generic error message prevents user enumeration
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new IllegalArgumentException("Invalid email or password"));
 
-        // 2. Verify password (constant-time BCrypt compare)
         if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
             throw new IllegalArgumentException("Invalid email or password");
         }
 
         log.info("[AUTH] Login successful: email={}", email);
 
-        // 3. Issue JWT
-        String token = jwtService.generateToken(email);
+        String role = "ROLE_USER";
+        if ("karthik@gmail.com".equalsIgnoreCase(email)) {
+            role = "ROLE_ADMIN";
+            if (!"ROLE_ADMIN".equals(user.getRole())) {
+                user.setRole("ROLE_ADMIN");
+                userRepository.save(user);
+            }
+        } else if ("ROLE_ADMIN".equals(user.getRole())) {
+            user.setRole("ROLE_USER");
+            userRepository.save(user);
+        } else if (user.getRole() != null) {
+            role = user.getRole();
+        }
+
+        String token = jwtService.generateToken(email, role, user.getName(), user.getUpiId());
+        String refreshToken = jwtService.generateRefreshToken(email);
 
         return AuthResponse.builder()
                 .token(token)
+                .refreshToken(refreshToken)
                 .email(email)
                 .name(user.getName())
                 .upiId(user.getUpiId())
+                .role(role)
                 .message("Login successful")
+                .build();
+    }
+
+    // ─── Refresh Token ───────────────────────────────────────────────────────
+
+    @Transactional(readOnly = true)
+    public AuthResponse refresh(String refreshToken) {
+        if (refreshToken == null || !jwtService.isRefreshTokenValid(refreshToken)) {
+            throw new IllegalArgumentException("Invalid or expired refresh token");
+        }
+
+        String email = jwtService.extractEmail(refreshToken);
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new IllegalArgumentException("User not found: " + email));
+
+        String role = "karthik@gmail.com".equalsIgnoreCase(email) ? "ROLE_ADMIN" : "ROLE_USER";
+        String newAccessToken = jwtService.generateToken(email, role, user.getName(), user.getUpiId());
+        String newRefreshToken = jwtService.generateRefreshToken(email);
+
+        log.info("[AUTH] Token refreshed successfully for email={}", email);
+
+        return AuthResponse.builder()
+                .token(newAccessToken)
+                .refreshToken(newRefreshToken)
+                .email(email)
+                .name(user.getName())
+                .upiId(user.getUpiId())
+                .role(role)
+                .message("Token refreshed successfully")
                 .build();
     }
 
     // ─── Private Helpers ─────────────────────────────────────────────────────
 
-    /**
-     * Generate a unique UPI ID derived from the user's name.
-     *
-     * Algorithm:
-     *   1. Strip non-alphanumeric characters from name, lowercase
-     *   2. Append "@upi" → "johnsmith@upi"
-     *   3. If taken, append a numeric suffix → "johnsmith1@upi", "johnsmith2@upi"
-     *
-     * @param name raw user-provided name (already trimmed)
-     * @return unique UPI ID
-     */
     private String generateUniqueUpiId(String name) {
         String base = name.toLowerCase()
                           .replaceAll("[^a-z0-9]", "")
@@ -206,9 +195,5 @@ public class AuthService {
 
     // ─── Internal DTO ────────────────────────────────────────────────────────
 
-    /**
-     * Internal value carrier for data returned from the @Transactional method.
-     * Avoids passing the full User entity across the transaction boundary.
-     */
-    public record RegistrationResult(String name, String upiId) {}
+    public record RegistrationResult(String name, String upiId, String role) {}
 }

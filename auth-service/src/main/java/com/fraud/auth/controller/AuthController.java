@@ -81,6 +81,31 @@ public class AuthController {
         }
     }
 
+    // ─── Refresh Token ────────────────────────────────────────────────────────
+
+    /**
+     * POST /auth/refresh
+     *
+     * Request body:
+     *   { "refreshToken": "eyJ..." }
+     *
+     * Response (200 OK):
+     *   { "token": "eyJ...", "refreshToken": "eyJ...", "email": "john@example.com", ... }
+     */
+    @PostMapping("/refresh")
+    public ResponseEntity<?> refresh(@RequestBody Map<String, String> request) {
+        String refreshToken = request != null ? request.get("refreshToken") : null;
+        log.info("[AUTH-CTRL] Refresh token request");
+        try {
+            AuthResponse response = authService.refresh(refreshToken);
+            return ResponseEntity.ok(response);
+        } catch (IllegalArgumentException e) {
+            log.warn("[AUTH-CTRL] Token refresh failed: {}", e.getMessage());
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("error", e.getMessage()));
+        }
+    }
+
     // ─── Health ──────────────────────────────────────────────────────────────
 
     /**

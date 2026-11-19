@@ -77,7 +77,8 @@ Copy `.env.example` to `.env` and configure:
 | `MYSQL_USER` | `root` | MySQL user for services |
 | `MYSQL_PASSWORD` | `strongPassword123` | MySQL user password |
 | `JWT_SECRET` | 256-bit base64 string | Shared between auth-service and api-gateway. **Must be identical.** |
-| `OPENAI_API_KEY` | `sk-proj-...` | Required for Layer 3 AI fraud detection |
+| `GEMINI_API_KEY` | Gemini API key | Required for Layer 3 AI fraud detection |
+| `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model used for contextual fraud analysis |
 
 ### Optional variables
 
@@ -113,6 +114,8 @@ openssl rand -base64 32
 # Node.js
 node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
 ```
+
+Create a Gemini API key at [Google AI Studio](https://aistudio.google.com/apikey) and set `GEMINI_API_KEY` in your local `.env` file. The default model is `gemini-2.5-flash`; set `GEMINI_MODEL` to another model available to your API key if needed. Keep `.env` private and never commit the key. Without a configured Gemini key, the application still starts, but AI-layer results are held for manual review.
 
 ---
 
@@ -212,5 +215,5 @@ Key Kubernetes features for this system:
 - **HorizontalPodAutoscaler** on transaction-service and fraud-detection-service (CPU/Kafka lag metrics)
 - **PodDisruptionBudget** to maintain at least 2 fraud-detection-service replicas during rolling updates
 - **ConfigMaps** for fraud rule thresholds (hot-reload without pod restart)
-- **Secrets** for JWT_SECRET, OPENAI_API_KEY, database credentials
+- **Secrets** for JWT_SECRET, GEMINI_API_KEY, database credentials
 - **Liveness/Readiness probes** using Spring Actuator `/actuator/health` endpoints

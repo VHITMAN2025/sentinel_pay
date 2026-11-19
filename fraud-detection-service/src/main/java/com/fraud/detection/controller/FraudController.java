@@ -2,8 +2,12 @@ package com.fraud.detection.controller;
 
 import com.fraud.common.dto.FraudResult;
 import com.fraud.common.dto.TransactionEvent;
+import com.fraud.detection.dto.PendingReviewTransactionResponse;
 import com.fraud.detection.model.PaymentRecord;
+import com.fraud.detection.model.ReviewDecision;
+import com.fraud.detection.model.ReviewDecisionRequest;
 import com.fraud.detection.model.UserTransactionHistory;
+import com.fraud.detection.payment.PaymentProcessorService;
 import com.fraud.detection.service.FraudDetectionService;
 import com.fraud.detection.service.RedisService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -19,6 +23,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -49,6 +54,7 @@ public class FraudController {
 
     @Autowired private FraudDetectionService fraudDetectionService;
     @Autowired private RedisService          redisService;
+    @Autowired private PaymentProcessorService paymentProcessorService;
 
     // ── Health ────────────────────────────────────────────────────────────────
 
@@ -159,6 +165,143 @@ public class FraudController {
                             "No fraud result found for txId=" + transactionId, request));
         }
         return ResponseEntity.noContent().build(); // 204
+    }
+
+    @GetMapping("/review/{transactionId}")
+    public ResponseEntity<?> getReviewDecision(
+            @PathVariable @NotBlank String transactionId,
+            @RequestHeader(value = "X-User-Email", required = false) String userEmail,
+            HttpServletRequest request) {
+        ResponseEntity<?> accessError = validateReviewAccess(transactionId, userEmail, request);
+        if (accessError != null) return accessError;
+
+        ReviewDecision decision = redisService.getReviewDecision(transactionId);
+        TransactionEvent reviewEvent = redisService.getReviewTransaction(transactionId);
+        if (decision != null && reviewEvent != null) {
+            decision.setAmount(reviewEvent.getAmount());
+            decision.setPayeeUpiId(reviewEvent.getPayeeUpiId());
+        }
+        if (decision != null) {
+            PaymentRecord paymentRecord = redisService.getPaymentRecord(transactionId);
+            if (paymentRecord != null) {
+                decision.setPaymentStatus(paymentRecord.getPaymentStatus());
+            }
+        }
+        if (decision == null && reviewEvent != null) {
+            decision = ReviewDecision.builder()
+                    .transactionId(transactionId)
+                    .amount(reviewEvent.getAmount())
+                    .payeeUpiId(reviewEvent.getPayeeUpiId())
+                    .build();
+        }
+        return decision == null
+                ? ResponseEntity.noContent().build()
+                : ResponseEntity.ok(decision);
+    }
+
+    @GetMapping("/review/pending")
+    public ResponseEntity<?> getPendingReviewTransactions(
+            @RequestHeader(value = "X-User-Email", required = false) String userEmail,
+            HttpServletRequest request) {
+        if (userEmail == null || userEmail.isBlank()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(buildErrorBody(HttpStatus.UNAUTHORIZED, "Authentication required.", request));
+        }
+        List<PendingReviewTransactionResponse> pending =
+                redisService.getPendingReviewTransactions(userEmail);
+        return ResponseEntity.ok(pending);
+    }
+
+    @PostMapping("/review/{transactionId}")
+    public ResponseEntity<?> submitReviewDecision(
+            @PathVariable @NotBlank String transactionId,
+            @RequestHeader(value = "X-User-Email", required = false) String userEmail,
+            @Valid @RequestBody ReviewDecisionRequest decisionRequest,
+            HttpServletRequest request) {
+        ResponseEntity<?> accessError = validateReviewAccess(transactionId, userEmail, request);
+        if (accessError != null) return accessError;
+
+        TransactionEvent reviewEvent = redisService.getReviewTransaction(transactionId);
+        if (decisionRequest.getDecision() == ReviewDecision.Decision.APPROVE) {
+            if (reviewEvent == null || !userEmail.equalsIgnoreCase(reviewEvent.getPayerUserId())) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                        .body(buildErrorBody(HttpStatus.NOT_FOUND,
+                                "The payment details needed to complete this reviewed transaction have expired.", request));
+            }
+            if (reviewEvent.getPaymentMode() != null
+                    && !"BANK".equalsIgnoreCase(reviewEvent.getPaymentMode())) {
+                return ResponseEntity.status(HttpStatus.CONFLICT)
+                        .body(buildErrorBody(HttpStatus.CONFLICT,
+                                "Payer approval is available only for simulated BANK payments.", request));
+            }
+        }
+
+        ReviewDecision requested = ReviewDecision.builder()
+                .transactionId(transactionId)
+                .userId(userEmail)
+                .decision(decisionRequest.getDecision())
+                .decidedAt(LocalDateTime.now())
+                .amount(reviewEvent != null ? reviewEvent.getAmount() : null)
+                .payeeUpiId(reviewEvent != null ? reviewEvent.getPayeeUpiId() : null)
+                .build();
+        ReviewDecision saved = redisService.saveReviewDecision(requested);
+        if (saved == null || saved.getDecision() != requested.getDecision()) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(buildErrorBody(HttpStatus.CONFLICT,
+                            "A different decision was already recorded for this transaction.", request));
+        }
+
+        if (saved.getDecision() == ReviewDecision.Decision.APPROVE) {
+            if (!redisService.acquireReviewApprovalLock(transactionId)) {
+                PaymentRecord inProgress = redisService.getPaymentRecord(transactionId);
+                saved.setPaymentStatus(inProgress != null ? inProgress.getPaymentStatus() : null);
+                return ResponseEntity.status(HttpStatus.ACCEPTED).body(saved);
+            }
+            try {
+                PaymentRecord paymentRecord = paymentProcessorService
+                        .processManuallyApprovedPayment(reviewEvent);
+                if (paymentRecord == null) {
+                    return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                            .body(buildErrorBody(HttpStatus.SERVICE_UNAVAILABLE,
+                                    "Approval was recorded, but payment processing has not completed. Retry shortly.",
+                                    request));
+                }
+                saved.setPaymentStatus(paymentRecord.getPaymentStatus());
+            } catch (Exception e) {
+                log.error("[FRAUD-CTRL] Approved review payment failed txId={}", transactionId, e);
+                return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                        .body(buildErrorBody(HttpStatus.SERVICE_UNAVAILABLE,
+                                "Approval was recorded, but the payment could not be completed. Retry shortly.",
+                                request));
+            } finally {
+                redisService.releaseReviewApprovalLock(transactionId);
+            }
+        }
+        return ResponseEntity.ok(saved);
+    }
+
+    private ResponseEntity<?> validateReviewAccess(String transactionId, String userEmail,
+                                                    HttpServletRequest request) {
+        if (userEmail == null || userEmail.isBlank()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(buildErrorBody(HttpStatus.UNAUTHORIZED, "Authentication required.", request));
+        }
+        FraudResult result = redisService.getFraudResult(transactionId);
+        if (result == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(buildErrorBody(HttpStatus.NOT_FOUND, "Fraud result not found.", request));
+        }
+        if (!FraudResult.FraudStatus.REVIEW.equals(result.getStatus())) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(buildErrorBody(HttpStatus.CONFLICT,
+                            "Only transactions with a REVIEW verdict can receive a review decision.", request));
+        }
+        if (!userEmail.equalsIgnoreCase(result.getUserId())) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(buildErrorBody(HttpStatus.FORBIDDEN,
+                            "Only the payer can record a decision for this transaction.", request));
+        }
+        return null;
     }
 
     // ── User History (debug) ──────────────────────────────────────────────────

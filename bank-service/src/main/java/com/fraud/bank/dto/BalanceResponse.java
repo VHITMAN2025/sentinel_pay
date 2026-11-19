@@ -20,4 +20,6 @@ public class BalanceResponse {
     private String     upiId;
     private BigDecimal balance;
     private String     currency;
+    @Builder.Default
+    private String     accountStatus = "ACTIVE";
 }

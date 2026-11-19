@@ -1,8 +1,8 @@
 import React from 'react';
-import { Card, CardContent, Box, Typography, Avatar } from '@mui/material';
+import { Card, CardContent, Box, Typography } from '@mui/material';
 
 /**
- * StatsCard — a metric display card shown on the Dashboard.
+ * StatsCard — Modern, responsive metric display card shown on Dashboards.
  *
  * @param {React.ReactNode} icon       - MUI icon element
  * @param {string}          title      - metric label
@@ -11,35 +11,61 @@ import { Card, CardContent, Box, Typography, Avatar } from '@mui/material';
  * @param {'primary'|'success'|'warning'|'error'|'info'} [color]
  */
 export default function StatsCard({ icon, title, value, subtitle, color = 'primary' }) {
-  const bgMap = {
-    primary: 'primary.main',
-    success: 'success.main',
-    warning: 'warning.main',
-    error:   'error.main',
-    info:    'info.main',
+  const colorMap = {
+    primary: { text: 'primary.main', bg: 'rgba(99, 102, 241, 0.12)' },
+    success: { text: 'success.main', bg: 'rgba(16, 185, 129, 0.12)' },
+    warning: { text: 'warning.main', bg: 'rgba(245, 158, 11, 0.12)' },
+    error:   { text: 'error.main',   bg: 'rgba(239, 68, 68, 0.12)' },
+    info:    { text: 'info.main',    bg: 'rgba(56, 189, 248, 0.12)' },
   };
 
+  const scheme = colorMap[color] || colorMap.primary;
+
   return (
-    <Card sx={{ height: '100%' }}>
-      <CardContent sx={{ p: 3 }}>
-        <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
-          <Box>
-            <Typography variant="body2" color="text.secondary" fontWeight={500} gutterBottom>
-              {title}
-            </Typography>
-            <Typography variant="h4" fontWeight={800} color="text.primary" lineHeight={1.2}>
-              {value ?? '—'}
-            </Typography>
-            {subtitle && (
-              <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
-                {subtitle}
-              </Typography>
-            )}
-          </Box>
-          <Avatar sx={{ bgcolor: bgMap[color] || bgMap.primary, width: 52, height: 52 }}>
+    <Card
+      sx={{
+        height: '100%',
+        p: 0.5,
+        display: 'flex',
+        flexDirection: 'column',
+        justifyContent: 'space-between',
+        transition: 'transform 0.15s ease, box-shadow 0.15s ease',
+        '&:hover': {
+          transform: 'translateY(-2px)',
+        },
+      }}
+    >
+      <CardContent sx={{ p: 2.5, '&:last-child': { pb: 2.5 } }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2 }}>
+          <Typography variant="body2" color="text.secondary" fontWeight={600} noWrap>
+            {title}
+          </Typography>
+          <Box
+            sx={{
+              width: 42,
+              height: 42,
+              borderRadius: 2.5,
+              bgcolor: scheme.bg,
+              color: scheme.text,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+            }}
+          >
             {icon}
-          </Avatar>
+          </Box>
         </Box>
+
+        <Typography variant="h4" fontWeight={800} color="text.primary" sx={{ letterSpacing: '-0.02em', mb: 0.5 }}>
+          {value ?? '—'}
+        </Typography>
+
+        {subtitle && (
+          <Typography variant="caption" color="text.secondary" fontWeight={500} sx={{ display: 'block' }}>
+            {subtitle}
+          </Typography>
+        )}
       </CardContent>
     </Card>
   );

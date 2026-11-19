@@ -10,7 +10,7 @@
  *   0.60 – 1.00 → FRAUD   (red)
  */
 
-import React, { useEffect, useRef } from 'react';
+import React from 'react';
 import { Box, Typography, useTheme } from '@mui/material';
 
 const RADIUS     = 72;
@@ -51,7 +51,8 @@ function scoreToLabel(score) {
 
 export default function RiskGauge({ score, size = 'medium' }) {
   const theme   = useTheme();
-  const clamp   = Math.max(0, Math.min(1, score ?? 0));
+  const available = typeof score === 'number' && Number.isFinite(score);
+  const clamp   = available ? Math.max(0, Math.min(1, score)) : 0;
   const fillEnd = START_ANGLE + SWEEP_ANGLE * clamp;
   const color   = scoreToColor(clamp);
   const label   = scoreToLabel(clamp);
@@ -114,7 +115,7 @@ export default function RiskGauge({ score, size = 'medium' }) {
             fontWeight="800"
             fontSize={22 * scale}
           >
-            {Math.round(clamp * 100)}%
+            {available ? `${Math.round(clamp * 100)}%` : '—'}
           </text>
           <text
             x={cx} y={cy + 18 * scale}
@@ -124,7 +125,7 @@ export default function RiskGauge({ score, size = 'medium' }) {
             fontWeight="500"
             fontSize={9 * scale}
           >
-            CONFIDENCE
+            EST. RISK
           </text>
         </svg>
       </Box>
@@ -134,7 +135,7 @@ export default function RiskGauge({ score, size = 'medium' }) {
         fontWeight={800}
         sx={{ color, letterSpacing: '0.08em', fontSize: `${0.75 * scale}rem` }}
       >
-        {label}
+        {available ? label : 'UNAVAILABLE'}
       </Typography>
 
       {/* Zone legend */}

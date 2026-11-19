@@ -131,7 +131,7 @@ const AlertItem = memo(function AlertItem({ alert }) {
             {[
               ['Payee UPI',       alert.payeeUpiId    || '—'],
               ['Detection Layer', detectionLayerLabel(alert.detectionLayer)],
-              ['Confidence',      formatConfidence(alert.confidenceScore)],
+              ['Estimated risk',  formatConfidence(alert.confidenceScore)],
               ['Amount',         formatCurrency(alert.amount)],
             ].map(([label, value]) => (
               <Box key={label}>
@@ -171,7 +171,7 @@ export default function AlertsPanel({ maxHeight = 480 }) {
         reason:         event.reason || 'Flagged by fraud detection system',
         amount:         event.amount || 0,
         payeeUpiId:     event.payeeUpiId || null,
-        confidenceScore: event.confidenceScore ?? 0,
+        confidenceScore: event.confidenceScore ?? null,
         detectionLayer: event.detectionLayer || 'RULE_BASED',
         timestamp:      event.analyzedAt || new Date().toISOString(),
         read:           false,

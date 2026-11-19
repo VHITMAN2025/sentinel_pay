@@ -2,7 +2,7 @@
  * FraudAlerts.jsx — Enhanced fraud analysis page (v2)
  *
  * Upgrades over v1:
- *  - RiskGauge replaces LinearProgress for confidence score display
+ *  - RiskGauge displays estimated fraud probability
  *  - FraudTrendChart shows hourly safe/blocked/review breakdown
  *  - AlertsPanel provides live alert feed with simulate capability
  *  - react-hook-form manages form state (replaces useState + manual validate)
@@ -15,20 +15,23 @@ import { useForm } from 'react-hook-form';
 import {
   Box, Typography, Card, CardContent, Grid, TextField,
   Button, CircularProgress, Divider, Alert,
-  Chip, Table, TableBody, TableCell, TableContainer,
+  Chip, Dialog, DialogActions, DialogContent, DialogTitle, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Paper, Tooltip,
 } from '@mui/material';
 import ShieldIcon        from '@mui/icons-material/Shield';
 import SearchIcon        from '@mui/icons-material/Search';
-import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import InfoOutlinedIcon  from '@mui/icons-material/InfoOutlined';
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline';
+import CancelOutlinedIcon from '@mui/icons-material/CancelOutlined';
 import toast             from 'react-hot-toast';
 import StatusBadge       from '../components/common/StatusBadge';
 import RiskGauge         from '../components/fraud/RiskGauge';
 import FraudTrendChart   from '../components/fraud/FraudTrendChart';
 import AlertsPanel       from '../components/fraud/AlertsPanel';
 import { FraudResultSkeleton } from '../components/common/PageSkeleton';
-import { getFraudResult, getUserFraudHistory, deleteFraudResult } from '../api/fraudApi';
+import {
+  getFraudResult, getUserFraudHistory, getReviewDecision, submitReviewDecision,
+} from '../api/fraudApi';
 import { createAbortController } from '../api/axiosConfig';
 import {
   formatDateTime, truncateTxId, detectionLayerLabel, formatCurrency,
@@ -39,14 +42,16 @@ import { useAppState } from '../context/AppStateContext';
 
 export default function FraudAlerts() {
   const { user }   = useAuth();
-  const { stats, recordTransaction } = useAppState();
+  const { stats, recordTransaction, refreshBalance } = useAppState();
 
   // Fraud result lookup
   const { register: regTx, handleSubmit: handleTxSubmit, formState: { errors: txErrors } } = useForm();
   const [txLoading, setTxLoading] = useState(false);
   const [txResult,  setTxResult]  = useState(null);
   const [txPending, setTxPending] = useState(false);
-  const [deleting,  setDeleting]  = useState(false);
+  const [reviewDecision, setReviewDecision] = useState(null);
+  const [reviewActionLoading, setReviewActionLoading] = useState(false);
+  const [approvalDialogOpen, setApprovalDialogOpen] = useState(false);
   const txAbortRef                = useRef(null);
 
   // User history lookup
@@ -69,6 +74,7 @@ export default function FraudAlerts() {
     setTxLoading(true);
     setTxResult(null);
     setTxPending(false);
+    setReviewDecision(null);
 
     try {
       const { status, data } = await getFraudResult(transactionId.trim());
@@ -81,6 +87,17 @@ export default function FraudAlerts() {
         // the same field layout regardless of which API sourced the data.
         const normalized = normalizeTxRecord(null, data);
         setTxResult(normalized);
+        if (normalized.fraudStatus === 'REVIEW') {
+          try {
+            setReviewDecision(await getReviewDecision(normalized.transactionId));
+          } catch (decisionError) {
+            if (decisionError.response?.status === 403) {
+              setReviewDecision({ decision: 'NOT_ALLOWED' });
+            } else {
+              throw decisionError;
+            }
+          }
+        }
         // Push to global state → Analytics charts + session stats update
         recordTransaction(normalized);
       }
@@ -107,18 +124,27 @@ export default function FraudAlerts() {
     }
   };
 
-  // ── Delete result ──────────────────────────────────────────────────────────
-  const handleDelete = async () => {
-    if (!txResult) return;
-    setDeleting(true);
+  const handleReviewDecision = async (decision) => {
+    if (!txResult || reviewActionLoading) return;
+    setApprovalDialogOpen(false);
+    setReviewActionLoading(true);
     try {
-      await deleteFraudResult(txResult.transactionId);
-      toast.success('Fraud result cleared — transaction can be re-analysed');
-      setTxResult(null);
+      const saved = await submitReviewDecision(txResult.transactionId, decision);
+      setReviewDecision(saved);
+      if (decision === 'APPROVE' && saved.paymentStatus === 'SUCCESS') {
+        refreshBalance();
+        toast.success('Payment approved and the recipient was credited.');
+      } else if (decision === 'APPROVE') {
+        toast(saved.paymentStatus
+          ? `Approval recorded. Payment status: ${saved.paymentStatus}.`
+          : 'Approval recorded. Payment processing is still in progress.', { icon: '⏳' });
+      } else {
+        toast.success('Cancellation recorded. No funds were moved.');
+      }
     } catch (err) {
-      toast.error(err.message || 'Delete failed');
+      toast.error(err.response?.data?.message || err.message || 'Could not record your decision');
     } finally {
-      setDeleting(false);
+      setReviewActionLoading(false);
     }
   };
 
@@ -220,7 +246,7 @@ export default function FraudAlerts() {
                   {/* Risk gauge + metadata side by side */}
                   <Box sx={{ display: 'flex', gap: 3, alignItems: 'flex-start', mb: 2 }}>
                     <Box sx={{ flexShrink: 0 }}>
-                      <RiskGauge score={txResult.confidenceScore ?? 0} size="small" />
+                      <RiskGauge score={txResult.confidenceScore} size="small" />
                     </Box>
                     <Box sx={{ flexGrow: 1 }}>
                       {[
@@ -251,22 +277,90 @@ export default function FraudAlerts() {
                     </Alert>
                   )}
 
-                  <Button
-                    variant="outlined"
-                    color="error"
-                    size="small"
-                    fullWidth
-                    startIcon={deleting ? <CircularProgress size={14} color="inherit" /> : <DeleteOutlineIcon />}
-                    onClick={handleDelete}
-                    disabled={deleting}
-                  >
-                    Clear result (allow re-analysis)
-                  </Button>
+                  {txResult.fraudStatus === 'REVIEW' && (
+                    <Alert severity="info" sx={{ mt: 2, borderRadius: 2 }}>
+                      <Typography variant="subtitle2" fontWeight={700} gutterBottom>
+                        Your decision
+                      </Typography>
+                      <Typography variant="body2" sx={{ mb: 1.5 }}>
+                        No money has moved. You can approve this specific payment to continue as a simulated BANK transfer, or cancel it. Approval overrides the automated REVIEW hold; FRAUD transactions cannot be approved here.
+                      </Typography>
+                      {reviewDecision?.decision === 'NOT_ALLOWED' ? (
+                        <Typography variant="body2">Only the payer can record a decision for this transaction.</Typography>
+                      ) : (
+                        <>
+                          {reviewDecision?.decision === 'APPROVE' ? (
+                            <Typography variant="body2" fontWeight={700}>
+                              {reviewDecision.paymentStatus === 'SUCCESS'
+                                ? 'Approved — payment completed and recipient credited.'
+                                : `Approval recorded${reviewDecision.paymentStatus ? ` — payment ${reviewDecision.paymentStatus.toLowerCase()}.` : '; payment is processing.'}`}
+                            </Typography>
+                          ) : reviewDecision?.decision === 'CANCEL' ? (
+                            <Typography variant="body2" fontWeight={700}>
+                              You cancelled this payment attempt. No funds were moved.
+                            </Typography>
+                          ) : (
+                            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                              <Button
+                                size="small"
+                                variant="contained"
+                                color="warning"
+                                startIcon={<CheckCircleOutlineIcon />}
+                                disabled={reviewActionLoading}
+                                onClick={() => setApprovalDialogOpen(true)}
+                              >
+                                Approve &amp; send
+                              </Button>
+                              <Button
+                                size="small"
+                                variant="outlined"
+                                color="error"
+                                startIcon={<CancelOutlinedIcon />}
+                                disabled={reviewActionLoading || reviewDecision?.decision === 'CONFIRM'}
+                                onClick={() => handleReviewDecision('CANCEL')}
+                              >
+                                Cancel this attempt
+                              </Button>
+                            </Box>
+                          )}
+                          {reviewActionLoading && <CircularProgress size={18} sx={{ ml: 1 }} />}
+                        </>
+                      )}
+                    </Alert>
+                  )}
                 </Box>
               )}
             </CardContent>
           </Card>
         </Grid>
+
+        <Dialog open={approvalDialogOpen} onClose={() => setApprovalDialogOpen(false)}>
+          <DialogTitle>Approve this reviewed payment?</DialogTitle>
+          <DialogContent>
+            <Typography variant="body2" sx={{ mb: 1 }}>
+              This overrides the automated REVIEW hold for this transaction. SentinelPay will attempt to debit your simulated bank account and credit the recipient.
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Transaction: {txResult?.transactionId}
+              {reviewDecision?.amount ? ` · ${formatCurrency(reviewDecision.amount)}` : ''}
+              {reviewDecision?.payeeUpiId ? ` · To ${reviewDecision.payeeUpiId}` : ''}
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              Approval is only available for REVIEW verdicts and simulated BANK payments. A FRAUD verdict is never overridden.
+            </Typography>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setApprovalDialogOpen(false)} disabled={reviewActionLoading}>Go back</Button>
+            <Button
+              variant="contained"
+              color="warning"
+              onClick={() => handleReviewDecision('APPROVE')}
+              disabled={reviewActionLoading}
+            >
+              {reviewActionLoading ? 'Processing…' : 'Confirm & send'}
+            </Button>
+          </DialogActions>
+        </Dialog>
 
         {/* ── Behaviour history ───────────────────────────────────────────── */}
         <Grid item xs={12} md={6}>
@@ -393,9 +487,9 @@ export default function FraudAlerts() {
                   ['High velocity',      '> 10 transactions / 24 h',  'Rule Engine',        'FRAUD'],
                   ['Impossible travel',  '2 cities within 5 min',     'Behaviour History',  'FRAUD'],
                   ['Device change',      'New device detected',       'History → AI',       'REVIEW'],
-                  ['Contextual risk',    'AI confidence > 0.6',       'AI (GPT)',           'FRAUD'],
-                  ['Borderline risk',    'AI confidence 0.4 – 0.6',   'AI (GPT)',           'REVIEW'],
-                  ['Low risk',           'AI confidence < 0.4',       'AI (GPT)',           'SAFE'],
+                  ['Contextual risk',    'Estimated fraud risk > 60%',       'AI (Gemini)',        'FRAUD'],
+                  ['Borderline risk',    'Estimated fraud risk 40% – 60%',   'AI (Gemini)',        'REVIEW'],
+                  ['Low risk',           'Estimated fraud risk < 40%',       'AI (Gemini)',        'SAFE'],
                 ].map(([scenario, trigger, layer, verdict]) => (
                   <TableRow key={scenario} hover>
                     <TableCell>{scenario}</TableCell>

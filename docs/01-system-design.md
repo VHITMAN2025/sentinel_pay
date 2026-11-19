@@ -6,7 +6,7 @@ SentinelPay follows a **microservices architecture** with event-driven communica
 
 **Async by default** — Payment submission and fraud analysis are decoupled. A user submits a payment and immediately gets a transaction ID. Fraud analysis happens asynchronously; the frontend polls for the result. This means the system can handle high throughput without sacrificing fraud analysis depth.
 
-**Short-circuit layered analysis** — The 3-layer fraud pipeline runs the cheapest check first. If Layer 1 (rule engine) catches fraud, the system returns immediately without touching Redis or OpenAI. This keeps average latency low while AI handles only borderline cases.
+**Short-circuit layered analysis** — The 3-layer fraud pipeline runs the cheapest check first. If Layer 1 (rule engine) catches fraud, the system returns immediately without touching Redis or Gemini. This keeps average latency low while AI handles only borderline cases.
 
 **Identity-from-JWT always** — The API Gateway extracts user identity from the JWT and injects it as `X-User-Email`. No downstream service trusts any `userId` field in a request body. This eliminates an entire class of identity spoofing attacks.
 
@@ -41,7 +41,7 @@ SentinelPay follows a **microservices architecture** with event-driven communica
                                 │   │         ┌───────────▼────────┐
                          /api/fraud/**         │  fraud-detect-svc  │
                     ┌─────────────────┐        │    Port 8082        │
-                    │                 │        │    Redis + OpenAI   │
+                    │                 │        │    Redis + Gemini   │
                     │   fraud-svc     │◄───────┤    3-Layer Pipeline │
                     │   (polling)     │        └───────────┬────────┘
                     └─────────────────┘                    │

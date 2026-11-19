@@ -7,13 +7,13 @@
 | Payment submission (202) | 10–50ms | Bank service UPI lookup |
 | Fraud result — Layer 1 (rule engine) | < 5ms | Redis read only |
 | Fraud result — Layer 2 (history) | 5–20ms | Redis read + write |
-| Fraud result — Layer 3 (AI) | 300–800ms | OpenAI API |
+| Fraud result — Layer 3 (AI) | Model/API dependent | Google Gemini API |
 | Frontend first poll finds result | ~3 seconds | Fixed poll interval |
 | Email notification delivered | 5–15 seconds | SMTP relay |
 
 **Throughput estimate (single-node):**
 - Transaction submissions: ~200 req/s (constrained by MySQL writes in bank-service)
-- Fraud analysis: ~50–100 transactions/s (constrained by OpenAI rate limits)
+- Fraud analysis: ~50–100 transactions/s (constrained by Gemini API rate limits)
 - Rule-only fraud verdicts: ~1,000/s (Redis ops)
 
 ---
@@ -33,7 +33,7 @@ docker-compose up -d --scale transaction-service=3
 
 ### fraud-detection-service
 
-Scale to N replicas. Each replica is a Kafka consumer in the same group. Kafka distributes partitions across consumers — with 3 partitions and 3 replicas, each replica handles exactly 1 partition. This gives 3× throughput for rule engine and history analysis. AI calls scale with replicas too (independent OpenAI API calls per consumer).
+Scale to N replicas. Each replica is a Kafka consumer in the same group. Kafka distributes partitions across consumers — with 3 partitions and 3 replicas, each replica handles exactly 1 partition. This gives 3× throughput for rule engine and history analysis. AI calls scale with replicas too (independent Gemini API calls per consumer).
 
 ```yaml
 docker-compose up -d --scale fraud-detection-service=3
@@ -51,9 +51,9 @@ Stateless — scale freely. Place an L4 load balancer (Nginx, HAProxy, AWS NLB) 
 
 ### 🔴 High Priority
 
-**Fine-tuned ML model instead of pure GPT prompting**
+**Fine-tuned ML model instead of generative-AI prompting**
 
-Currently, Layer 3 sends a natural language prompt to OpenAI GPT-4 for each transaction. While flexible, this has two drawbacks: it's expensive (API cost per transaction) and slow (200–800ms). A fine-tuned model trained on labelled historical transaction data would be faster (50–100ms inference), cheaper, and more accurate for domain-specific patterns.
+Currently, Layer 3 sends a natural language prompt to the configured Gemini model for each transaction. While flexible, this has two drawbacks: it incurs API cost per transaction and adds external service latency. A fine-tuned model trained on labelled historical transaction data could be faster, cheaper, and more accurate for domain-specific patterns.
 
 Suggested approach: Export Redis transaction history, label outcomes (SAFE/FRAUD/REVIEW), train a gradient boosting model (XGBoost/LightGBM), and deploy as a sidecar alongside the fraud-detection-service.
 
@@ -81,7 +81,7 @@ When `paymentMode=RAZORPAY`, the system creates a Razorpay order but currently r
 
 Inter-service REST calls (fraud-service → bank-service, transaction-service → bank-service) currently fail fast on timeout. Add Circuit Breaker (Resilience4j) with fallback strategies:
 - bank-service unavailable → cache last known UPI mapping for read operations
-- OpenAI unavailable → Layer 3 falls back gracefully (currently AI_FALLBACK, could be smarter)
+- Gemini unavailable → Layer 3 falls back safely to REVIEW (`AI_FALLBACK`)
 
 **Service discovery with Eureka**
 
@@ -152,4 +152,4 @@ export default function () {
 - Prometheus → JVM heap usage, GC frequency on fraud-detection-service
 - Redis memory usage: `redis-cli info memory`
 
-**Expected bottleneck:** At ~100 rps sustained, the OpenAI API will be the first limit hit (default rate limit: 500 RPM for GPT-4). Add a local cache for identical transaction patterns, or implement the ML model fallback.
+**Expected bottleneck:** At sustained high request rates, Gemini API quotas and rate limits may become the first bottleneck. Add a local cache for identical transaction patterns, or implement the ML model fallback.

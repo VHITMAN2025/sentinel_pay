@@ -3,6 +3,7 @@ package com.fraud.transaction.dto;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import lombok.Data;
 
 import java.math.BigDecimal;
@@ -34,6 +35,14 @@ public class UpiPaymentRequest {
     @NotNull(message = "amount is required")
     @DecimalMin(value = "0.01", message = "amount must be greater than 0.01")
     private BigDecimal amount;
+
+    /**
+     * 6-digit UPI PIN authorizing the payment.
+     * Required for real-time security authorization.
+     */
+    @NotBlank(message = "UPI PIN is required to authorize payment")
+    @Pattern(regexp = "^[0-9]{6}$", message = "UPI PIN must be a 6-digit numeric code")
+    private String upiPin;
 
     /** Device identifier (e.g. "iPhone-14", "Android-Pixel-7") */
     private String device;

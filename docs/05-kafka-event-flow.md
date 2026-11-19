@@ -156,7 +156,7 @@ The `transactions.DLT` topic captures messages that fail all retry attempts.
 
 **Common causes:**
 - Redis connection failure (fraud result cannot be stored)
-- OpenAI API timeout (Layer 3 fails and fallback also fails)
+- Gemini API timeout (Layer 3 fails and fallback also fails)
 - Bank service unavailable (payment processing fails)
 
 **Replay procedure:**
@@ -204,7 +204,7 @@ Time 3ms:   transaction-service returns 202 { transactionId, status: PENDING }
 Time 50ms:  Kafka delivers message to fraud-detection-service consumer
 Time 51ms:  Layer 1 rule engine runs (< 1ms)
 Time 55ms:  Layer 2 Redis history analysis (5ms Redis lookup)
-Time 300ms: Layer 3 OpenAI GPT analysis (200-800ms)
+Time 300ms: Layer 3 Gemini analysis (latency depends on the selected model and API)
 Time 350ms: FraudResult stored in Redis
 
 Time 3000ms: Frontend polls GET /api/fraud/result/{id} → 200 OK

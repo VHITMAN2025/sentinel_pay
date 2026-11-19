@@ -11,6 +11,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
@@ -100,16 +101,22 @@ public class TransactionController {
                             .fraudReason(safeStr(fraudResult, "reason"))
                             .timestamp(LocalDateTime.now().toString());
 
-            if ("FRAUD".equals(fraudStatus) || "REVIEW".equals(fraudStatus)) {
+            if ("FRAUD".equals(fraudStatus)) {
                 return ResponseEntity.ok(builder
                         .overallStatus("BLOCKED")
-                        .message("Blocked (" + fraudStatus + ")")
+                        .message("Blocked (FRAUD)")
                         .build());
             }
 
             Map<String, Object> paymentRecord = fraudServiceClient.getPaymentRecord(transactionId);
 
             if (paymentRecord == null) {
+                if ("REVIEW".equals(fraudStatus)) {
+                    return ResponseEntity.ok(builder
+                            .overallStatus("REVIEW")
+                            .message("Payment is on hold. The payer must approve or cancel it.")
+                            .build());
+                }
                 return ResponseEntity.status(HttpStatus.ACCEPTED)
                         .body(builder
                                 .overallStatus("PENDING")
@@ -126,6 +133,8 @@ public class TransactionController {
             String paymentMode = safeStr(paymentRecord, "paymentMode");
             BigDecimal amount = safeBigDecimal(paymentRecord, "amount");
             String razorpayOrderId = safeStr(paymentRecord, "razorpayOrderId");
+            String paymentFailureReason = safeStr(paymentRecord, "failureReason");
+            String compensationReason = safeStr(paymentRecord, "compensationReason");
 
             String overall = switch (paymentStatus) {
                 case "SUCCESS" -> "COMPLETE";
@@ -133,6 +142,7 @@ public class TransactionController {
                 case "COMPENSATED" -> "COMPENSATED";
                 case "COMPENSATION_FAILED" -> "CRITICAL";
                 case "RAZORPAY_ORDER_CREATED" -> "RAZORPAY_PENDING";
+                case "SKIPPED" -> "BLOCKED";
                 default -> "PENDING";
             };
 
@@ -145,19 +155,16 @@ public class TransactionController {
                     .payeeEmail(payeeEmail)
                     .payeeUpiId(payeeUpiId)
                     .razorpayOrderId(razorpayOrderId)
-                    .message("Final status")
+                    .paymentFailureReason(paymentFailureReason)
+                    .compensationReason(compensationReason)
+                    .message("REVIEW".equals(fraudStatus) && "SUCCESS".equals(paymentStatus)
+                            ? "Payer approved the reviewed payment; recipient was credited."
+                            : "Final status")
                     .build());
 
-        } catch (Exception e) {
-            logger.error("[TX-CTRL] ERROR txId={}", transactionId, e);
-
-            return ResponseEntity.ok(
-                    TransactionStatusResponse.builder()
-                            .transactionId(transactionId)
-                            .overallStatus("BLOCKED")
-                            .message("Safe fallback")
-                            .build()
-            );
+        } catch (ResponseStatusException e) {
+            logger.error("[TX-CTRL] Could not retrieve fraud status for txId={}", transactionId, e);
+            throw e;
         }
     }
 

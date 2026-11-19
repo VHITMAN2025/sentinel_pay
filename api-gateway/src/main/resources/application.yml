@@ -4,3 +4,6 @@ server:
 spring:
   application:
     name: api-gateway
+
+jwt:
+  secret: ${JWT_SECRET:c7f92b48d61e3a5091e7c4f1a2d8e6b34567890abcdef1234567890abcdef1234}

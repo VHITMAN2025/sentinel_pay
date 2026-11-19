@@ -14,7 +14,7 @@ import java.time.LocalDateTime;
  * FraudResult — Shared Fraud Analysis Verdict DTO
  *
  * Produced by the fraud-detection-service after running the full
- * 3-layer pipeline (Rule Engine → Redis History → Spring AI).
+ * 3-layer pipeline (Rule Engine → Redis History → Gemini AI).
  *
  * Stored in Redis under key: "fraud:result:{transactionId}"
  * Retrievable via:          GET /api/fraud/result/{transactionId}
@@ -62,15 +62,15 @@ public class FraudResult implements Serializable {
     private String reason;
 
     /**
-     * AI confidence score: 0.0 → 1.0
-     *   0.0 = certainly SAFE
-     *   1.0 = certainly FRAUD
+     * Estimated fraud probability: 0.0 → 1.0
+     *   0.0 = lowest estimated fraud risk
+     *   1.0 = highest estimated fraud risk
      *   0.4–0.6 = borderline → REVIEW
      *
      * Populated by all detection layers for consistency:
-     *   RULE_BASED    → deterministic (0.85–1.0)
-     *   REDIS_HISTORY → probabilistic (0.7–0.95)
-     *   AI            → model-derived (0.0–1.0)
+     *   RULE_BASED    → deterministic
+     *   REDIS_HISTORY → deterministic
+     *   AI            → model-derived (P(fraud))
      */
     private Double confidenceScore;
 
@@ -78,8 +78,8 @@ public class FraudResult implements Serializable {
      * Detection layer that produced this result:
      *   RULE_BASED    — fast rule engine caught it
      *   REDIS_HISTORY — user behaviour history triggered it
-     *   AI            — OpenAI GPT made the call
-     *   AI_FALLBACK   — AI was unavailable, defaulted to SAFE
+     *   AI            — configured Gemini model made the call
+     *   AI_FALLBACK   — AI was unavailable; transaction held for review
      */
     private String detectionLayer;
 

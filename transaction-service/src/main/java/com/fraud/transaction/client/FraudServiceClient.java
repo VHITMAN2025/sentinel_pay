@@ -6,10 +6,12 @@ import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Map;
 
@@ -23,7 +25,9 @@ import java.util.Map;
  *   GET /api/fraud/result/{id}   → FraudResult (as Map)
  *   GET /api/fraud/payment/{id}  → PaymentRecord (as Map)
  *
- * Both return null on 202 (still processing) or on any error (fail-open).
+ * A missing result/payment record is returned as null. Service communication
+ * failures are surfaced so callers do not mistake an unavailable detector for
+ * a transaction that is still processing.
  * Callers must handle null as "not yet available".
  */
 @Slf4j
@@ -48,7 +52,7 @@ public class FraudServiceClient {
 
     /**
      * Fetch the FraudResult for a transaction. Returns the body as a Map.
-     * Returns null if not yet available (202) or on any error.
+     * Returns null if not yet available (202) or not found (404).
      */
     @SuppressWarnings("unchecked")
     public Map<String, Object> getFraudResult(String transactionId) {
@@ -64,9 +68,10 @@ public class FraudServiceClient {
             log.debug("[FRAUD-CLIENT] Fraud result not found for txId={}", transactionId);
             return null;
         } catch (RestClientException e) {
-            log.warn("[FRAUD-CLIENT] Failed to fetch fraud result for txId={}: {}",
+            log.error("[FRAUD-CLIENT] Failed to fetch fraud result for txId={}: {}",
                     transactionId, e.getMessage());
-            return null;
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "Fraud detection service is unavailable", e);
         }
     }
 
@@ -74,7 +79,7 @@ public class FraudServiceClient {
 
     /**
      * Fetch the PaymentRecord for a transaction. Returns the body as a Map.
-     * Returns null if no payment record exists (202 or 404) or on any error.
+     * Returns null if no payment record exists (404).
      */
     @SuppressWarnings("unchecked")
     public Map<String, Object> getPaymentRecord(String transactionId) {
@@ -90,9 +95,10 @@ public class FraudServiceClient {
             log.debug("[FRAUD-CLIENT] No payment record for txId={} (non-UPI or blocked)", transactionId);
             return null;
         } catch (RestClientException e) {
-            log.warn("[FRAUD-CLIENT] Failed to fetch payment record for txId={}: {}",
+            log.error("[FRAUD-CLIENT] Failed to fetch payment record for txId={}: {}",
                     transactionId, e.getMessage());
-            return null;
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "Fraud detection service is unavailable", e);
         }
     }
 }

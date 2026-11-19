@@ -16,7 +16,7 @@
 import React, { memo } from 'react';
 import {
   Box, Typography, Chip, Divider, LinearProgress,
-  List, ListItem, ListItemIcon, ListItemText, Tooltip,
+  List, ListItem, ListItemIcon, ListItemText,
   Card, CardContent, Alert, Collapse,
 } from '@mui/material';
 import CheckCircleIcon    from '@mui/icons-material/CheckCircle';
@@ -45,19 +45,19 @@ const LAYER_META = {
   },
   AI: {
     icon:    <PsychologyIcon />,
-    label:   'AI / ML Model',
-    color:   'error',
-    desc:    'A machine learning model assigned a high-risk score based on transaction features.',
+    label:   'Google Gemini',
+    color:   'info',
+    desc:    'Gemini evaluated the transaction context and returned the displayed verdict.',
   },
   AI_FALLBACK: {
     icon:    <ShieldIcon />,
     label:   'AI Fallback Layer',
     color:   'warning',
-    desc:    'Primary AI model was unavailable; a fallback heuristic model was used.',
+    desc:    'Gemini analysis was unavailable, so the transaction was held for manual review.',
   },
 };
 
-// ── Risk factor inference (parsed from `reason` string) ──────────────────────
+// ── Risk factor inference (only explicit anomaly phrases in `reason`) ────────
 function parseRiskFactors(reason) {
   // Backend (especially BANK mode) can return null, undefined, or non-string.
   // Guard here so this function NEVER throws regardless of what arrives.
@@ -65,26 +65,22 @@ function parseRiskFactors(reason) {
 
   const factors = [];
   const r = reason.toLowerCase();
+  const mentions = (pattern) => pattern.test(r);
 
-  if (r.includes('amount') || r.includes('large') || r.includes('threshold'))
+  if (mentions(/(?:unusual(?:ly)?|high|large|excessive|exceeded|above|spike|deviation).{0,50}(?:amount|spending|transaction value)|(?:amount|spending|transaction value).{0,50}(?:unusual|high|large|excessive|exceeded|above|spike|deviation)/))
     factors.push({ label: 'Unusual Amount',     icon: '💰', desc: 'Transaction value deviates significantly from your average.' });
-  if (r.includes('velocity') || r.includes('rapid') || r.includes('multiple'))
+  if (mentions(/(?:velocity|transaction frequency|rapid transactions|too many transactions).{0,50}(?:exceed|high|unusual|rapid|limit|threshold)|(?:exceed|high|unusual|rapid|limit|threshold).{0,50}(?:velocity|transaction frequency|transactions per)/))
     factors.push({ label: 'High Velocity',       icon: '⚡', desc: 'Multiple transactions detected in a short time window.' });
-  if (r.includes('new') || r.includes('unknown') || r.includes('payee'))
+  if (mentions(/(?:new|unknown|unrecognized|unrecognised|unfamiliar|first[- ]time).{0,40}(?:payee|recipient|upi id)|(?:payee|recipient|upi id).{0,40}(?:new|unknown|unrecognized|unrecognised|unfamiliar|first[- ]time)/))
     factors.push({ label: 'Unknown Recipient',   icon: '👤', desc: 'First-time payment to this UPI ID.' });
-  if (r.includes('night') || r.includes('midnight') || r.includes('unusual time'))
+  if (mentions(/(?:night|midnight|unusual time|outside normal hours)/))
     factors.push({ label: 'Unusual Timing',      icon: '🕐', desc: 'Transaction attempted outside your normal active hours.' });
-  if (r.includes('location') || r.includes('geo') || r.includes('country'))
+  if (mentions(/(?:new|unknown|unrecognized|unrecognised|unfamiliar|unexpected|different).{0,40}(?:location|city|country)|(?:location|city|country).{0,40}(?:new|unknown|unrecognized|unrecognised|unfamiliar|unexpected|different|anomal)/))
     factors.push({ label: 'Location Anomaly',    icon: '📍', desc: 'Activity from an unfamiliar geographic location.' });
-  if (r.includes('device') || r.includes('fingerprint'))
+  if (mentions(/(?:new|unknown|unrecognized|unrecognised|unfamiliar|different|mismatch|change).{0,40}(?:device|fingerprint)|(?:device|fingerprint).{0,40}(?:new|unknown|unrecognized|unrecognised|unfamiliar|different|mismatch|change)/))
     factors.push({ label: 'Device Mismatch',     icon: '📱', desc: 'Request originated from an unrecognised device.' });
-  if (r.includes('pattern') || r.includes('model') || r.includes('ai'))
+  if (mentions(/(?:suspicious|unusual|inconsistent|anomalous).{0,40}(?:behavior|behaviour|pattern)|(?:behavior|behaviour|pattern).{0,40}(?:suspicious|unusual|inconsistent|anomalous)/))
     factors.push({ label: 'Behavioral Anomaly',  icon: '🧠', desc: 'AI detected a pattern inconsistent with your transaction history.' });
-
-  // Fallback — always show at least one factor
-  if (factors.length === 0 && reason) {
-    factors.push({ label: 'Flagged Signal',      icon: '🚩', desc: reason });
-  }
 
   return factors;
 }
@@ -98,27 +94,33 @@ const STATUS_META = {
 
 // ── Confidence bar ─────────────────────────────────────────────────────────────
 function ConfidenceBar({ score }) {
-  // Clamp: coerce null/undefined/NaN to 0, cap at [0, 1]
-  const safe  = (typeof score === 'number' && isFinite(score)) ? Math.min(Math.max(score, 0), 1) : 0;
+  const available = typeof score === 'number' && isFinite(score);
+  const safe  = available ? Math.min(Math.max(score, 0), 1) : 0;
   const pct   = Math.round(safe * 100);
   const color = safe >= 0.6 ? 'error' : safe >= 0.4 ? 'warning' : 'success';
   return (
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 0.5 }}>
-        <Typography variant="caption" color="text.secondary">Fraud confidence score</Typography>
-        <Typography variant="caption" fontWeight={700} color={`${color}.main`}>{pct}%</Typography>
+        <Typography variant="caption" color="text.secondary">Estimated fraud risk</Typography>
+        <Typography variant="caption" fontWeight={700} color={available ? `${color}.main` : 'text.secondary'}>
+          {available ? `${pct}%` : 'Unavailable'}
+        </Typography>
       </Box>
-      <LinearProgress
-        variant="determinate"
-        value={pct}
-        color={color}
-        sx={{ height: 8, borderRadius: 4 }}
-      />
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 0.5 }}>
-        <Typography variant="caption" color="text.disabled">Safe</Typography>
-        <Typography variant="caption" color="text.disabled">Suspicious</Typography>
-        <Typography variant="caption" color="text.disabled">Fraud</Typography>
-      </Box>
+      {available && (
+        <>
+          <LinearProgress
+            variant="determinate"
+            value={pct}
+            color={color}
+            sx={{ height: 8, borderRadius: 4 }}
+          />
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 0.5 }}>
+            <Typography variant="caption" color="text.disabled">Safe</Typography>
+            <Typography variant="caption" color="text.disabled">Suspicious</Typography>
+            <Typography variant="caption" color="text.disabled">Fraud</Typography>
+          </Box>
+        </>
+      )}
     </Box>
   );
 }
@@ -139,7 +141,7 @@ const FraudExplanation = memo(function FraudExplanation({ result }) {
 
   const statusMeta  = STATUS_META[fraudStatus] || STATUS_META.REVIEW;
   const layerMeta   = LAYER_META[detectionLayer] || null;
-  const riskFactors = parseRiskFactors(reason);   // always returns array — never throws
+  const riskFactors = fraudStatus === 'SAFE' ? [] : parseRiskFactors(reason);
 
   return (
     <Card
@@ -171,7 +173,7 @@ const FraudExplanation = memo(function FraudExplanation({ result }) {
 
         {/* Confidence score — confidenceScore is already validated to number|null above */}
         <Box sx={{ mb: 2 }}>
-          <ConfidenceBar score={confidenceScore ?? 0} />
+          <ConfidenceBar score={confidenceScore} />
         </Box>
 
         <Divider sx={{ mb: 2 }} />
@@ -222,8 +224,8 @@ const FraudExplanation = memo(function FraudExplanation({ result }) {
             <Typography variant="caption" color="text.secondary" fontWeight={700} sx={{ textTransform: 'uppercase', letterSpacing: 0.5 }}>
               System Reason
             </Typography>
-            <Box sx={{ mt: 0.5, p: 1.5, bgcolor: 'grey.50', borderRadius: 1, border: '1px solid', borderColor: 'divider' }}>
-              <Typography variant="body2" sx={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>
+            <Box sx={{ mt: 0.5, p: 1.5, bgcolor: 'background.paper', color: 'text.primary', borderRadius: 1, border: '1px solid', borderColor: 'divider' }}>
+              <Typography variant="body2" color="text.primary" sx={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>
                 {reason}
               </Typography>
             </Box>
@@ -249,7 +251,7 @@ const FraudExplanation = memo(function FraudExplanation({ result }) {
               <Typography variant="body2" color={`${statusMeta.color}.dark`}>
                 {fraudStatus === 'SAFE'   && 'Transaction is considered legitimate. No action required.'}
                 {fraudStatus === 'FRAUD'  && 'This transaction has been blocked. If you believe this is a mistake, contact support with your transaction ID.'}
-                {fraudStatus === 'REVIEW' && 'Your transaction is under review. Funds are held temporarily. Resolution typically takes 1–2 hours.'}
+                {fraudStatus === 'REVIEW' && 'No money has moved. Record whether you recognize or cancel this attempt in Fraud Alerts. To pay, start a new transaction that must pass a fresh fraud check.'}
               </Typography>
             </Box>
           </Box>

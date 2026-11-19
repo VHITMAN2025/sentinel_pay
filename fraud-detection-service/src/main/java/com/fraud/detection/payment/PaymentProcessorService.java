@@ -1,9 +1,12 @@
 package com.fraud.detection.payment;
 
 import com.fraud.common.dto.TransactionEvent;
+import com.fraud.common.dto.FraudResult;
 import com.fraud.detection.client.BankServiceClient;
 import com.fraud.detection.model.PaymentRecord;
 import com.fraud.detection.model.PaymentStatus;
+import com.fraud.detection.model.ReviewDecision;
+import com.fraud.detection.model.ReviewDecision.Decision;
 import com.fraud.detection.producer.NotificationProducer;
 import com.fraud.detection.service.RazorpayRefundService;
 import com.fraud.detection.service.RedisService;
@@ -43,15 +46,53 @@ public class PaymentProcessorService {
     // ================= ENTRY =================
 
     public void processPayment(TransactionEvent event) {
+        processPayment(event, false);
+    }
 
+    public PaymentRecord processManuallyApprovedPayment(TransactionEvent event) {
+        if (event == null || event.getTransactionId() == null || event.getPayerUserId() == null) {
+            throw new IllegalArgumentException("Reviewed payment is missing its transaction or payer identity");
+        }
+        FraudResult result = redisService.getFraudResult(event.getTransactionId());
+        ReviewDecision decision = redisService.getReviewDecision(event.getTransactionId());
+        if (result == null || result.getStatus() != FraudResult.FraudStatus.REVIEW
+                || decision == null
+                || decision.getDecision() != Decision.APPROVE
+                || !event.getTransactionId().equals(decision.getTransactionId())
+                || decision.getUserId() == null
+                || !event.getPayerUserId().equalsIgnoreCase(decision.getUserId())
+                || result.getUserId() == null
+                || !event.getPayerUserId().equalsIgnoreCase(result.getUserId())) {
+            throw new IllegalStateException("Payer approval is not valid for this REVIEW transaction");
+        }
+        if (event.getPaymentMode() != null && !"BANK".equalsIgnoreCase(event.getPaymentMode())) {
+            throw new IllegalStateException("Manual REVIEW approval supports simulated BANK transfers only");
+        }
+
+        PaymentRecord existing = redisService.getPaymentRecord(event.getTransactionId());
+        if (existing != null && EnumSet.of(PaymentStatus.SUCCESS, PaymentStatus.FAILED,
+                PaymentStatus.COMPENSATED, PaymentStatus.COMPENSATION_FAILED,
+                PaymentStatus.RAZORPAY_ORDER_CREATED, PaymentStatus.SKIPPED).contains(existing.getPaymentStatus())) {
+            return existing;
+        }
+
+        processPayment(event, true);
+        return redisService.getPaymentRecord(event.getTransactionId());
+    }
+
+    private void processPayment(TransactionEvent event, boolean payerApprovedReview) {
         long startMs = System.currentTimeMillis();
         String txId = event.getTransactionId();
         String traceId = MDC.get("traceId");
         if (traceId == null || traceId.isBlank()) traceId = "NO_TRACE-" + txId;
 
-
-        if (!redisService.fraudResultExists(txId)) {
-            log.error("[PAYMENT] Fraud result missing → abort {}", txId);
+        FraudResult fraudResult = redisService.getFraudResult(txId);
+        boolean allowedVerdict = payerApprovedReview
+                ? fraudResult != null && fraudResult.getStatus() == FraudResult.FraudStatus.REVIEW
+                : fraudResult != null && fraudResult.getStatus() == FraudResult.FraudStatus.SAFE;
+        if (!allowedVerdict) {
+            log.error("[PAYMENT] Invalid fraud verdict for payment — txId={} manualApproval={}",
+                    txId, payerApprovedReview);
             return;
         }
 
@@ -96,13 +137,14 @@ public class PaymentProcessorService {
         if ("RAZORPAY".equals(paymentMode)) {
             processRazorpay(event, startMs, traceId);
         } else {
-            processBank(event, startMs, traceId);
+            processBank(event, startMs, traceId, payerApprovedReview);
         }
     }
 
     // ================= BANK =================
 
-    private void processBank(TransactionEvent event, long startMs, String traceId) {
+    private void processBank(TransactionEvent event, long startMs, String traceId,
+                             boolean payerApprovedReview) {
 
         String txId = event.getTransactionId();
         String payer = event.getPayerUserId();
@@ -200,6 +242,7 @@ public class PaymentProcessorService {
 
         saveRecord(buildRecord(event,event.getPaymentMode(), payee)
                 .paymentStatus(PaymentStatus.SUCCESS)
+                .payerApprovedReview(payerApprovedReview)
                 .completedAt(LocalDateTime.now())
                 .elapsedMs(elapsed(startMs))
                 .build());
@@ -221,7 +264,7 @@ public class PaymentProcessorService {
 
         if (orderId == null) {
             log.error("Razorpay failed → fallback BANK");
-            processBank(event, startMs, traceId);
+            processBank(event, startMs, traceId, false);
             return;
         }
 

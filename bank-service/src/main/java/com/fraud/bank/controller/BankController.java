@@ -2,8 +2,12 @@ package com.fraud.bank.controller;
 
 import com.fraud.bank.dto.AccountResponse;
 import com.fraud.bank.dto.BalanceResponse;
+import com.fraud.bank.dto.BankTransactionResponse;
+import com.fraud.bank.dto.ChangePinRequest;
 import com.fraud.bank.dto.CreateAccountRequest;
 import com.fraud.bank.dto.DebitCreditRequest;
+import com.fraud.bank.dto.PinCheckResult;
+import com.fraud.bank.dto.VerifyPinRequest;
 import com.fraud.bank.service.BankService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -14,6 +18,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
+import java.util.List;
 
 /**
  * BankController — REST API for bank-service (Polish v3)
@@ -52,6 +57,7 @@ public class BankController {
 
     private static final String INTERNAL_SERVICE_HEADER = "X-Internal-Service";
     private static final String USER_EMAIL_HEADER       = "X-User-Email";
+    private static final String UPI_PIN_HEADER          = "X-UPI-PIN";
 
     private final BankService bankService;
 
@@ -146,9 +152,11 @@ public class BankController {
      * @param userEmail injected by API Gateway from the validated JWT subject
      */
     @GetMapping("/balance")
-    public ResponseEntity<BalanceResponse> getBalance(
+    public ResponseEntity<?> getBalance(
             @RequestHeader(value = USER_EMAIL_HEADER, required = false) String userEmail,
-            @RequestParam(value = "userId",required = false) String userId) {
+            @RequestHeader(value = UPI_PIN_HEADER, required = false) String upiPinHeader,
+            @RequestParam(value = "userId", required = false) String userId,
+            @RequestParam(value = "upiPin", required = false) String upiPinParam) {
 
         // X-User-Email is the authoritative source — always prefer it over the param
         String effectiveUserId = (userEmail != null && !userEmail.isBlank())
@@ -159,15 +167,77 @@ public class BankController {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
 
-        if (userEmail != null && !userEmail.isBlank() && userId != null
-                && !userId.equals(userEmail)) {
-            log.warn("[BANK-CTRL] Balance: userId param '{}' overridden by X-User-Email '{}'",
-                    userId, userEmail);
+        String effectivePin = (upiPinHeader != null && !upiPinHeader.isBlank())
+                ? upiPinHeader
+                : upiPinParam;
+
+        try {
+            BalanceResponse response = bankService.getBalance(effectiveUserId, effectivePin);
+            return ResponseEntity.ok(response);
+        } catch (SecurityException se) {
+            log.warn("[BANK-CTRL] Balance access denied for user={}: {}", effectiveUserId, se.getMessage());
+            return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+                    .body(Map.of("error", se.getMessage(), "authenticated", true, "pinValid", false));
+        }
+    }
+
+    // ─── UPI PIN Management ──────────────────────────────────────────────────
+
+    /**
+     * POST /bank/pin/verify
+     * Verifies the user's 6-digit UPI PIN.
+     * Can be called by clients or internal services (e.g. transaction-service).
+     */
+    @PostMapping("/pin/verify")
+    public ResponseEntity<?> verifyPin(
+            @RequestHeader(value = USER_EMAIL_HEADER, required = false) String userEmail,
+            @RequestParam(value = "userId", required = false) String userIdParam,
+            @Valid @RequestBody VerifyPinRequest request) {
+
+        String effectiveUserId = (userEmail != null && !userEmail.isBlank()) ? userEmail : userIdParam;
+        if (effectiveUserId == null || effectiveUserId.isBlank()) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(Map.of("valid", false, "message", "User identification required"));
         }
 
-        log.info("[BANK-CTRL] Balance check: userId={}", effectiveUserId);
-        BalanceResponse response = bankService.getBalance(effectiveUserId);
-        return ResponseEntity.ok(response);
+        PinCheckResult checkResult = bankService.verifyUpiPinWithResult(effectiveUserId, request.getUpiPin());
+        if (!checkResult.isValid()) {
+            return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(checkResult);
+        }
+
+        return ResponseEntity.ok(checkResult);
+    }
+
+    /**
+     * POST /bank/pin/change
+     * Changes the user's UPI PIN after validating the current PIN.
+     */
+    @PostMapping("/pin/change")
+    public ResponseEntity<Map<String, Object>> changePin(
+            @RequestHeader(value = USER_EMAIL_HEADER, required = false) String userEmail,
+            @Valid @RequestBody ChangePinRequest request) {
+
+        if (userEmail == null || userEmail.isBlank()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(Map.of("success", false, "message", "Unauthorized"));
+        }
+
+        try {
+            bankService.changeUpiPin(userEmail, request.getCurrentPin(), request.getNewPin());
+            return ResponseEntity.ok(Map.of("success", true, "message", "UPI PIN changed successfully."));
+        } catch (IllegalArgumentException ex) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("success", false, "message", ex.getMessage()));
+        }
+    }
+
+    @GetMapping("/transactions")
+    public ResponseEntity<List<BankTransactionResponse>> getTransactionHistory(
+            @RequestHeader(value = USER_EMAIL_HEADER, required = false) String userEmail) {
+        if (userEmail == null || userEmail.isBlank()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        return ResponseEntity.ok(bankService.getTransactionHistory(userEmail));
     }
 
     // ─── Lookup by UPI ID ─────────────────────────────────────────────────────

@@ -163,11 +163,19 @@ apiClient.interceptors.response.use(
     const status         = error.response?.status;
     const originalConfig = error.config;
 
+    const isPinOrPaymentAuth =
+      Boolean(
+        originalConfig?.url?.includes('/bank/pin') ||
+        originalConfig?.url?.includes('/bank/balance') ||
+        originalConfig?.url?.includes('/api/upi/pay')
+      );
+
     // ── Refresh token flow ────────────────────────────────────────────────────
-    // Condition: 401 AND we haven't already retried this request AND it's not
-    // a refresh request itself (prevents infinite loops)
+    // Condition: 401 AND not a PIN or payment verification failure AND we haven't
+    // already retried this request AND it's not a refresh request itself
     if (
       status === 401 &&
+      !isPinOrPaymentAuth &&
       !originalConfig._retry &&
       !originalConfig.url?.includes('/auth/refresh') &&
       !originalConfig.url?.includes('/auth/login') &&
@@ -207,7 +215,7 @@ apiClient.interceptors.response.use(
     }
 
     // 401 on a non-retriable request (already retried, or auth endpoint)
-    if (status === 401 && !isRefreshing) {
+    if (status === 401 && !isRefreshing && !isPinOrPaymentAuth) {
       window.dispatchEvent(new CustomEvent('sentinelpay:auth:expired'));
     }
 

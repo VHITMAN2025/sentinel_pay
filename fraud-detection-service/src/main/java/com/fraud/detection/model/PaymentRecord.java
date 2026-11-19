@@ -79,6 +79,9 @@ public class PaymentRecord implements Serializable {
      */
     private String compensationReason;
 
+    /** True when the payer explicitly approved a REVIEW transaction to proceed. */
+    private boolean payerApprovedReview;
+
     /** When payment processing began (PENDING state set) */
     private LocalDateTime initiatedAt;
 

@@ -1,2 +1,4 @@
-C:\Users\shanm\paymentApp\fraud-detection-system\api-gateway\src\main\java\com\fraud\gateway\ApiGatewayApplication.java
-C:\Users\shanm\paymentApp\fraud-detection-system\api-gateway\src\main\java\com\fraud\gateway\config\GatewayConfig.java
+C:\Users\vijju\SentinelPay\api-gateway\src\main\java\com\fraud\gateway\ApiGatewayApplication.java
+C:\Users\vijju\SentinelPay\api-gateway\src\main\java\com\fraud\gateway\config\GatewayConfig.java
+C:\Users\vijju\SentinelPay\api-gateway\src\main\java\com\fraud\gateway\config\JwtConfig.java
+C:\Users\vijju\SentinelPay\api-gateway\src\main\java\com\fraud\gateway\filter\JwtAuthFilter.java

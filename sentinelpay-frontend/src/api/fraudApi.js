@@ -126,6 +126,25 @@ export const deleteFraudResult = async (transactionId) => {
 };
 
 /**
+ * Read or record the payer's decision for a REVIEW transaction.
+ * These decisions are audit notes and never override the fraud verdict.
+ */
+export const getReviewDecision = async (transactionId) => {
+  const { data } = await apiClient.get(`/api/fraud/review/${transactionId}`);
+  return data || null;
+};
+
+export const submitReviewDecision = async (transactionId, decision) => {
+  const { data } = await apiClient.post(`/api/fraud/review/${transactionId}`, { decision });
+  return data;
+};
+
+export const getPendingReviewTransactions = async () => {
+  const { data } = await apiClient.get('/api/fraud/review/pending');
+  return data;
+};
+
+/**
  * Direct synchronous fraud analysis — bypasses Kafka (testing/debug only).
  * @param {object} transactionEvent — full TransactionEvent body
  */

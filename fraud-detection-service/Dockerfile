@@ -2,7 +2,6 @@
 # Dockerfile — fraud-detection-service
 # Multi-stage build: Maven build → lightweight JRE runtime
 # Build context: fraud-detection-system/ (project root)
-# Spring AI requires Spring Milestone repository (configured in parent pom)
 # =============================================================
 
 # ── Stage 1: Build ────────────────────────────────────────────
@@ -40,7 +39,7 @@ USER appuser
 
 EXPOSE 8082
 
-# Higher start-period — Spring AI client initialization adds startup latency
+# Higher start-period allows the service and its dependencies to initialize.
 ENTRYPOINT ["java", \
   "-XX:+UseContainerSupport", \
   "-XX:MaxRAMPercentage=75.0", \

@@ -33,6 +33,12 @@ public class AuthResponse {
      */
     private String upiId;
 
+    /** User role (e.g. ROLE_USER, ROLE_ADMIN) */
+    private String role;
+
+    /** Refresh token for refreshing access tokens */
+    private String refreshToken;
+
     /** Human-readable status message (e.g. "Registration successful") */
     private String message;
 }

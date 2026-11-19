@@ -14,7 +14,7 @@ import com.fraud.detection.config.FraudRulesProperties;
  *
  * Pipeline executed per transaction:
  *   Kafka Consumer
- *     → FraudDetectionService (Rule Engine → Redis History → Spring AI)
+ *     → FraudDetectionService (Rule Engine → Redis History → Gemini AI)
  *       → RedisService.saveFraudResult()
  *         → GET /api/fraud/result/{id} available to client
  *
@@ -42,7 +42,7 @@ public class FraudDetectionApplication {
         log.info("  Fraud Detection Service started on port 8082         ");
         log.info("  Kafka Consumer ← topic: transactions                 ");
         log.info("  Redis namespaces: user:*:history | fraud:result:*    ");
-        log.info("  Spring AI: OpenAI GPT (Layer 3)                      ");
+        log.info("  Google Gemini AI (Layer 3)                           ");
         log.info("  GET /api/fraud/result/{id} → retrieve verdict        ");
         log.info("═══════════════════════════════════════════════════════");
     }

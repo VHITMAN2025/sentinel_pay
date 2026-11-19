@@ -51,6 +51,13 @@ public class User {
     @Column(name = "upi_id", nullable = false, unique = true)
     private String upiId;
 
+    /**
+     * User role: ROLE_USER or ROLE_ADMIN. Defaults to ROLE_USER.
+     */
+    @Builder.Default
+    @Column(nullable = false)
+    private String role = "ROLE_USER";
+
     /** When this account was created */
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;

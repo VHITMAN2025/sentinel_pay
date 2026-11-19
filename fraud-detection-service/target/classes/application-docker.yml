@@ -72,15 +72,6 @@ spring:
           min-idle: 2
           max-wait: 1000ms
 
-  ai:
-    openai:
-      api-key: ${OPENAI_API_KEY}
-      chat:
-        options:
-          model: gpt-4o-mini
-          temperature: 0.1
-          max-tokens: 150
-
 # Internal bank service URL — Docker service name
 bank-service:
   url: ${BANK_SERVICE_URL}

@@ -5,7 +5,7 @@
  * In production, wire the KPI and chart data to a real admin API.
  *
  * Sections:
- *  1. KPI Summary Cards  — Total, Safe, Blocked, Review, Fraud Rate, Avg Confidence
+ *  1. KPI Summary Cards  — Total, Safe, Blocked, Review, Fraud Rate, Average Risk
  *  2. Transactions Over Time  — AreaChart (Recharts)
  *  3. Verdict Distribution    — PieChart donut
  *  4. Risk Score Distribution — BarChart histogram (10 buckets: 0–9%, 10–19% … 90–100%)
@@ -126,9 +126,8 @@ function buildRiskHistogram(txHistory) {
     color: i >= 6 ? COLORS.blocked : i >= 4 ? COLORS.review : COLORS.safe,
   }));
   txHistory.forEach((tx) => {
-    // After normalization, confidenceScore is always a top-level field.
-    // The old `tx.fraudResult?.confidenceScore` path never existed in the data model.
-    const score = tx.confidenceScore ?? 0;
+    const score = tx.confidenceScore;
+    if (typeof score !== 'number' || !Number.isFinite(score)) return;
     const idx   = Math.min(Math.floor(score * 10), 9);
     buckets[idx].count += 1;
   });
@@ -136,7 +135,7 @@ function buildRiskHistogram(txHistory) {
 }
 
 function buildLayerData(txHistory) {
-  const counts = { RULE_BASED: 0, REDIS_HISTORY: 0, AI: 0, AI_FALLBACK: 0 };
+  const counts = { RULE_BASED: 0, REDIS_HISTORY: 0, AI: 0, AI_FALLBACK: 0, LOCAL_FALLBACK: 0 };
   txHistory.forEach((tx) => {
     // After normalization, detectionLayer is always a top-level field.
     const layer = tx.detectionLayer;
@@ -147,6 +146,7 @@ function buildLayerData(txHistory) {
     { name: 'History Check', value: counts.REDIS_HISTORY, fill: '#7c4dff' },
     { name: 'AI Model',      value: counts.AI,             fill: COLORS.ai },
     { name: 'AI Fallback',   value: counts.AI_FALLBACK,    fill: '#546e7a' },
+    { name: 'Local Risk',    value: counts.LOCAL_FALLBACK, fill: '#00838f' },
   ].filter((d) => d.value > 0);
 }
 
@@ -169,7 +169,7 @@ export default function Analytics() {
   const { stats, txHistory } = useAppState();
 
   const fraudRate     = stats.total > 0 ? ((stats.blocked / stats.total) * 100).toFixed(1) : 0;
-  const avgConfidence = useMemo(() => {
+  const averageRisk = useMemo(() => {
     // After normalization confidenceScore is always top-level (no fraudResult nesting).
     const scores = txHistory
       .map((tx) => tx.confidenceScore)
@@ -219,7 +219,7 @@ export default function Analytics() {
           <KpiCard label="Fraud Rate"  value={`${fraudRate}%`} color={Number(fraudRate) > 20 ? 'error' : 'success'} sub="of total analysed" />
         </Grid>
         <Grid item xs={6} sm={4} md={2}>
-          <KpiCard label="Avg Risk Score" value={avgConfidence} color="info" sub="mean confidence" />
+          <KpiCard label="Avg Risk Estimate" value={averageRisk} color="info" sub="mean estimated fraud risk" />
         </Grid>
       </Grid>
 
@@ -300,7 +300,7 @@ export default function Analytics() {
         <Grid item xs={12} md={7}>
           <Card elevation={0} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 2 }}>
             <Typography variant="subtitle1" fontWeight={700} mb={0.5}>Risk Score Distribution</Typography>
-            <Typography variant="caption" color="text.secondary">Confidence score buckets (0–100%)</Typography>
+            <Typography variant="caption" color="text.secondary">Estimated fraud risk (0–100%)</Typography>
             <ResponsiveContainer width="100%" height={220}>
               <BarChart data={histogram} margin={{ top: 16, right: 8, left: -20, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.06)" />

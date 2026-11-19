@@ -4,14 +4,19 @@ import com.fraud.common.dto.TransactionEvent;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
+import org.springframework.kafka.KafkaException;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.SendResult;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 
-import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
- * KafkaProducerService — async Kafka event publisher (Polish v3)
+ * KafkaProducerService — Kafka event publisher (Polish v3)
  *
  * Publishes TransactionEvent to the "transactions" topic for fraud analysis.
  *
@@ -33,10 +38,13 @@ public class KafkaProducerService {
     @Value("${kafka.topic.transactions:transactions}")
     private String transactionTopic;
 
+    @Value("${kafka.producer.send-timeout-ms:10000}")
+    private long sendTimeoutMs;
+
     /**
-     * Publish a TransactionEvent to Kafka asynchronously.
-     * Returns immediately — does not block the caller.
-     * Success/failure is logged via the CompletableFuture callback.
+     * Publish a TransactionEvent to Kafka and confirm broker acceptance before
+     * returning. Fraud analysis remains asynchronous, but callers must not
+     * receive a transaction ID for an event that was never queued.
      *
      * @param event the transaction event to publish
      */
@@ -45,24 +53,29 @@ public class KafkaProducerService {
                 event.getTransactionId(), event.getUserId(), event.getAmount());
 
         try {
-            CompletableFuture<SendResult<String, TransactionEvent>> future =
-                    kafkaTemplate.send(transactionTopic, event.getTransactionId(), event);
-
-            future.whenComplete((result, ex) -> {
-                if (ex == null) {
-                    log.info("[KAFKA-PRODUCER] ✓ Sent txId={} → partition={} offset={}",
-                            event.getTransactionId(),
-                            result.getRecordMetadata().partition(),
-                            result.getRecordMetadata().offset());
-                } else {
-                    log.error("[KAFKA-PRODUCER] ✗ Failed to send txId={} — error={}",
-                            event.getTransactionId(), ex.getMessage(), ex);
-                }
-            });
-
-        } catch (Exception e) {
-            log.error("[KAFKA-PRODUCER] ✗ Unexpected error publishing txId={}",
+            SendResult<String, TransactionEvent> result = kafkaTemplate
+                    .send(transactionTopic, event.getTransactionId(), event)
+                    .get(sendTimeoutMs, TimeUnit.MILLISECONDS);
+            log.info("[KAFKA-PRODUCER] ✓ Sent txId={} → partition={} offset={}",
+                    event.getTransactionId(),
+                    result.getRecordMetadata().partition(),
+                    result.getRecordMetadata().offset());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.error("[KAFKA-PRODUCER] ✗ Interrupted while publishing txId={}",
                     event.getTransactionId(), e);
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "Transaction could not be queued for fraud analysis", e);
+        } catch (ExecutionException | TimeoutException e) {
+            log.error("[KAFKA-PRODUCER] ✗ Failed to publish txId={} — error={}",
+                    event.getTransactionId(), e.getMessage(), e);
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "Transaction could not be queued for fraud analysis", e);
+        } catch (KafkaException e) {
+            log.error("[KAFKA-PRODUCER] ✗ Broker rejected txId={}",
+                    event.getTransactionId(), e);
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "Transaction could not be queued for fraud analysis", e);
         }
     }
 

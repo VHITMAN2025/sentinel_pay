@@ -123,7 +123,7 @@ Returns a combined `TransactionStatusResponse` with both verdict and payment out
 
 ## 2.4 Fraud Detection Service
 
-**Port:** 8082 | **Tech:** Spring Boot, Kafka Consumer, Redis, OpenAI (Spring AI)
+**Port:** 8082 | **Tech:** Spring Boot, Kafka Consumer, Redis, Google Gemini API
 
 The core of the system. Implements the **3-layer short-circuit fraud pipeline**.
 
@@ -136,15 +136,19 @@ Runs synchronously in-memory in < 1ms. Checks in order:
 if (amount > fraudRules.getHighAmountThreshold())  // default: ₹10,000
     return FRAUD("Amount exceeds threshold", 0.95)
 
-// 2. Unknown location
-if (userHasHistory && !history.getLocations().contains(location))
-    return FRAUD("Unknown location: " + location, 0.90)
+// 2. New location (only when a location is provided)
+if (userHasHistory && locationIsKnownToBeNew)
+    return REVIEW("New location — require payer confirmation")
 
-// 3. Velocity (too many transactions today)
+// 3. Velocity (too many recent attempts)
 long todayCount = history.getTodayTransactionCount()
-if (todayCount > fraudRules.getMaxTransactionsPerDay())  // default: 10
-    return FRAUD("Velocity exceeded: " + todayCount + " today", 0.88)
+if (todayCount >= fraudRules.getMaxTransactionsPerDay())  // default: 10
+    return REVIEW("High transaction velocity — require payer confirmation")
 ```
+
+Only an amount above the configured high-amount threshold and strong history
+signals such as impossible travel are hard-blocked automatically. A payer can
+explicitly approve a REVIEW transaction to continue the simulated BANK transfer.
 
 ### Layer 2: Redis History Analyser
 
@@ -168,9 +172,9 @@ if (isDifferentDevice(previous, current))
 
 The `"UNKNOWN"` sentinel is excluded from device/location comparisons. This prevents false positives from historical records stored before device tracking was added.
 
-### Layer 3: OpenAI GPT (Spring AI)
+### Layer 3: Google Gemini
 
-Only reached when Layers 1 and 2 don't conclusively flag FRAUD. Sends a structured prompt to GPT-4:
+Only reached when Layers 1 and 2 don't conclusively flag FRAUD. Sends a structured prompt to the configured Gemini model (default: `gemini-2.5-flash`):
 
 ```
 Analyse this UPI transaction for fraud risk:
@@ -186,7 +190,7 @@ Confidence interpretation:
 - `0.4–0.6` → `REVIEW` (human analyst queue)
 - `< 0.4` → `SAFE`
 
-If OpenAI is unavailable (timeout/API error), the service falls back to `SAFE` with `detectionLayer: "AI_FALLBACK"` and logs a warning. The system never blocks a transaction due to AI unavailability.
+If Gemini is unavailable (timeout/API error), the service returns `REVIEW` with `detectionLayer: "AI_FALLBACK"` so an uncertain transaction is held for human review.
 
 ### Payment Processing (post-verdict)
 
@@ -222,6 +226,7 @@ Simulates an NPCI bank backend. All balance operations use **pessimistic write l
 
 **External endpoints (via API Gateway):**
 - `GET /bank/balance` — authenticated user's balance (identity from X-User-Email)
+- `GET /bank/transactions` — authenticated user's latest 100 persisted ledger entries (sent, received, refunds)
 - `GET /bank/account/by-upi/{upiId}` — payee lookup
 
 **Internal endpoints (NOT routed through gateway):**

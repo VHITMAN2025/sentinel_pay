@@ -5,6 +5,10 @@ spring:
   application:
     name: fraud-detection-service
 
+gemini:
+  api-key: ${GEMINI_API_KEY:not-configured}
+  model: ${GEMINI_MODEL:gemini-1.5-flash}
+
 kafka:
   topic:
     transactions: ${KAFKA_TOPIC_TRANSACTIONS:transactions}
@@ -27,6 +31,12 @@ razorpay:
   # are injected via docker-compose environment block from .env.
   key-id: ${RAZORPAY_KEY_ID:not-configured}
   key-secret: ${RAZORPAY_KEY_SECRET:not-configured}
+
+# Frontend base URL — used to redirect the browser after Razorpay payment verification.
+# In Docker: set FRONTEND_URL env var (see docker-compose.yml).
+# Local dev default: http://localhost:3001 (CRA dev server / Nginx port).
+frontend:
+  url: ${FRONTEND_URL:http://localhost:3001}
 
 management:
   endpoints:

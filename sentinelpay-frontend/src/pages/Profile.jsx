@@ -1,24 +1,39 @@
 import React, { useState, useEffect } from 'react';
 import {
   Box, Typography, Card, CardContent, Grid, Avatar,
-  TextField, Button, Divider, Chip, CircularProgress,
+  TextField, Divider, Chip, Button,
   Alert, List, ListItem, ListItemIcon, ListItemText,
+  Dialog, DialogTitle, DialogContent, DialogActions,
+  IconButton, InputAdornment, CircularProgress,
 } from '@mui/material';
-import PersonIcon           from '@mui/icons-material/Person';
-import EmailIcon            from '@mui/icons-material/Email';
 import AccountBalanceIcon   from '@mui/icons-material/AccountBalance';
 import SecurityIcon         from '@mui/icons-material/Security';
 import CheckCircleIcon      from '@mui/icons-material/CheckCircle';
+import KeyIcon              from '@mui/icons-material/Key';
+import LockResetIcon        from '@mui/icons-material/LockReset';
+import VisibilityIcon       from '@mui/icons-material/Visibility';
+import VisibilityOffIcon    from '@mui/icons-material/VisibilityOff';
 import toast                from 'react-hot-toast';
+
 import { useAuth }          from '../context/AuthContext';
-import { getBalance }       from '../api/bankApi';
+import { getBalance, changeUpiPin } from '../api/bankApi';
 import { formatCurrency }   from '../utils/formatters';
 
 export default function Profile() {
   const { user } = useAuth();
 
-  const [balance, setBalance]   = useState(null);
+  const [balance, setBalance]       = useState(null);
   const [balLoading, setBalLoading] = useState(true);
+
+  // Change UPI PIN state
+  const [pinDialogOpen, setPinDialogOpen] = useState(false);
+  const [currentPin, setCurrentPin]       = useState('');
+  const [newPin, setNewPin]               = useState('');
+  const [confirmPin, setConfirmPin]       = useState('');
+  const [showCurrentPin, setShowCurrentPin] = useState(false);
+  const [showNewPin, setShowNewPin]         = useState(false);
+  const [pinSaving, setPinSaving]         = useState(false);
+  const [pinError, setPinError]           = useState('');
 
   useEffect(() => {
     getBalance()
@@ -31,17 +46,53 @@ export default function Profile() {
     ? user.name.split(' ').map((w) => w[0]).join('').toUpperCase().slice(0, 2)
     : '?';
 
+  const handleOpenPinDialog = () => {
+    setCurrentPin('');
+    setNewPin('');
+    setConfirmPin('');
+    setPinError('');
+    setPinDialogOpen(true);
+  };
+
+  const handleChangePinSubmit = async (e) => {
+    if (e) e.preventDefault();
+    if (!currentPin || currentPin.length !== 6) {
+      setPinError('Current UPI PIN must be 6 digits (Default: 212006)');
+      return;
+    }
+    if (!newPin || !/^[0-9]{6}$/.test(newPin)) {
+      setPinError('New UPI PIN must be exactly 6 digits');
+      return;
+    }
+    if (newPin !== confirmPin) {
+      setPinError('New UPI PIN and Confirm PIN do not match');
+      return;
+    }
+
+    setPinSaving(true);
+    setPinError('');
+    try {
+      await changeUpiPin(currentPin, newPin);
+      toast.success('UPI PIN changed successfully! Your new PIN is active.');
+      setPinDialogOpen(false);
+    } catch (err) {
+      setPinError(err.response?.data?.message || 'Failed to update UPI PIN. Verify current PIN.');
+    } finally {
+      setPinSaving(false);
+    }
+  };
+
   return (
     <Box>
-      <Typography variant="h5" fontWeight={700} mb={0.5}>Profile</Typography>
+      <Typography variant="h5" fontWeight={700} mb={0.5}>Profile & Security</Typography>
       <Typography variant="body2" color="text.secondary" mb={3}>
-        Your account information and security settings.
+        Manage your UPI identity, PIN security settings, and platform authentication.
       </Typography>
 
       <Grid container spacing={3}>
         {/* User card */}
         <Grid item xs={12} md={4}>
-          <Card>
+          <Card sx={{ mb: 3 }}>
             <CardContent sx={{ p: 3, textAlign: 'center' }}>
               <Avatar
                 sx={{
@@ -98,7 +149,7 @@ export default function Profile() {
           </Card>
         </Grid>
 
-        {/* Account details */}
+        {/* Account details and PIN */}
         <Grid item xs={12} md={8}>
           <Card sx={{ mb: 3 }}>
             <CardContent sx={{ p: 3 }}>
@@ -111,7 +162,7 @@ export default function Profile() {
                     label="Full Name"
                     value={user?.name || ''}
                     InputProps={{ readOnly: true }}
-                    variant="filled"
+                    variant="outlined"
                   />
                 </Grid>
                 <Grid item xs={12} sm={6}>
@@ -120,7 +171,7 @@ export default function Profile() {
                     label="Email Address"
                     value={user?.email || ''}
                     InputProps={{ readOnly: true }}
-                    variant="filled"
+                    variant="outlined"
                   />
                 </Grid>
                 <Grid item xs={12} sm={6}>
@@ -129,7 +180,7 @@ export default function Profile() {
                     label="UPI ID"
                     value={user?.upiId || balance?.upiId || '—'}
                     InputProps={{ readOnly: true }}
-                    variant="filled"
+                    variant="outlined"
                   />
                 </Grid>
                 <Grid item xs={12} sm={6}>
@@ -138,54 +189,84 @@ export default function Profile() {
                     label="Account Balance"
                     value={balLoading ? 'Loading…' : formatCurrency(balance?.balance)}
                     InputProps={{ readOnly: true }}
-                    variant="filled"
+                    variant="outlined"
                   />
                 </Grid>
               </Grid>
 
               <Alert severity="info" sx={{ mt: 2, borderRadius: 2 }}>
-                Profile editing is managed by the auth service. Contact support to update your name or email.
+                Profile identity is managed by the bank and auth service.
               </Alert>
+            </CardContent>
+          </Card>
+
+          {/* ── UPI PIN Settings Card ── */}
+          <Card sx={{ mb: 3, border: '1px solid', borderColor: 'primary.light', bgcolor: 'background.paper' }}>
+            <CardContent sx={{ p: 3 }}>
+              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                  <Box sx={{ p: 1, borderRadius: 2, bgcolor: 'primary.main', color: '#fff', display: 'flex' }}>
+                    <KeyIcon fontSize="small" />
+                  </Box>
+                  <Box>
+                    <Typography variant="h6" fontWeight={700}>UPI PIN Protection</Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      Secures account balance inquiry and payment execution
+                    </Typography>
+                  </Box>
+                </Box>
+                <Chip label="ACTIVE (6 DIGITS)" color="primary" size="small" sx={{ fontWeight: 700 }} />
+              </Box>
+
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5 }}>
+                Your 6-digit UPI PIN authorizes every outbound payment and authenticates balance checks.
+                The system-wide default PIN is <strong>212006</strong>. You can change it below anytime.
+              </Typography>
+
+              <Button
+                variant="outlined"
+                color="primary"
+                startIcon={<LockResetIcon />}
+                onClick={handleOpenPinDialog}
+                sx={{ textTransform: 'none', fontWeight: 700, borderRadius: 2, px: 2.5 }}
+              >
+                Change UPI PIN
+              </Button>
             </CardContent>
           </Card>
 
           {/* Security features */}
           <Card>
             <CardContent sx={{ p: 3 }}>
-              <Typography variant="h6" fontWeight={700} mb={2}>Security Features</Typography>
+              <Typography variant="h6" fontWeight={700} mb={2}>Active Security Defenses</Typography>
 
               {[
                 {
-                  title:   'JWT Authentication',
-                  desc:    'All requests use short-lived Bearer tokens validated at the API Gateway.',
+                  title:   'UPI PIN Authorization',
+                  desc:    '6-digit PIN verification before debiting funds or revealing sensitive balance.',
                   enabled: true,
                 },
                 {
-                  title:   'Rate Limiting',
-                  desc:    'Maximum 5 transaction submissions per 60 seconds to prevent abuse.',
+                  title:   'Fuzzy Brand Typosquatting Detection (Levenshtein)',
+                  desc:    'Blocks phishing handles impersonating brands like Amazon, PhonePe, SBI, Paytm in real time.',
                   enabled: true,
                 },
                 {
-                  title:   '3-Layer Fraud Detection',
-                  desc:    'Rule engine → behaviour history (Redis) → AI (OpenAI GPT) pipeline on every transaction.',
+                  title:   'Payee Cold-Start Surge & Mule Account Detection',
+                  desc:    'Identifies rapid velocity bursts and high-value payments to newly activated recipient accounts.',
                   enabled: true,
                 },
                 {
-                  title:   'Distributed Tracing',
-                  desc:    'Every transaction tagged with a trace ID across all 6 microservices.',
+                  title:   'JWT Gateway Authentication & Rate Limiting',
+                  desc:    'Strict Bearer token validation and 5-submission limit per 60s.',
                   enabled: true,
                 },
                 {
-                  title:   'Email Notifications',
-                  desc:    'Alerts sent for every fraud verdict via the notification service.',
+                  title:   '3-Layer Real-time AI Scoring',
+                  desc:    'Deterministic Rules → Redis Velocity History → Google Gemini AI scoring pipeline.',
                   enabled: true,
                 },
-                {
-                  title:   'Dead Letter Queue',
-                  desc:    'Failed transactions are routed to DLQ for investigation and replay.',
-                  enabled: true,
-                },
-              ].map(({ title, desc, enabled }) => (
+              ].map(({ title, desc }) => (
                 <Box
                   key={title}
                   sx={{
@@ -195,7 +276,7 @@ export default function Profile() {
                     mb: 2,
                     p: 1.5,
                     borderRadius: 2,
-                    bgcolor: 'grey.50',
+                    bgcolor: 'action.hover',
                   }}
                 >
                   <CheckCircleIcon color="success" sx={{ mt: 0.3, flexShrink: 0 }} />
@@ -215,6 +296,102 @@ export default function Profile() {
           </Card>
         </Grid>
       </Grid>
+
+      {/* ── Change UPI PIN Dialog ── */}
+      <Dialog
+        open={pinDialogOpen}
+        onClose={() => !pinSaving && setPinDialogOpen(false)}
+        maxWidth="xs"
+        fullWidth
+        PaperProps={{ sx: { borderRadius: 3, p: 1 } }}
+      >
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1.5, pb: 1 }}>
+          <Box sx={{ p: 1, borderRadius: 2, bgcolor: 'primary.main', color: '#fff', display: 'flex' }}>
+            <LockResetIcon fontSize="small" />
+          </Box>
+          <Box>
+            <Typography variant="h6" fontWeight={700}>Change UPI PIN</Typography>
+            <Typography variant="caption" color="text.secondary">
+              Update your 6-digit transaction PIN
+            </Typography>
+          </Box>
+        </DialogTitle>
+
+        <form onSubmit={handleChangePinSubmit}>
+          <DialogContent sx={{ pt: 1 }}>
+            {pinError && (
+              <Alert severity="error" sx={{ mb: 2, borderRadius: 2 }}>
+                {pinError}
+              </Alert>
+            )}
+
+            <TextField
+              fullWidth
+              label="Current UPI PIN"
+              type={showCurrentPin ? 'text' : 'password'}
+              value={currentPin}
+              onChange={(e) => setCurrentPin(e.target.value.replace(/[^0-9]/g, '').slice(0, 6))}
+              placeholder="Default: 212006"
+              inputProps={{ maxLength: 6, inputMode: 'numeric', style: { letterSpacing: '4px', textAlign: 'center' } }}
+              InputProps={{
+                endAdornment: (
+                  <InputAdornment position="end">
+                    <IconButton size="small" onClick={() => setShowCurrentPin(!showCurrentPin)} edge="end">
+                      {showCurrentPin ? <VisibilityOffIcon fontSize="small" /> : <VisibilityIcon fontSize="small" />}
+                    </IconButton>
+                  </InputAdornment>
+                ),
+              }}
+              helperText="Default PIN is 212006"
+              sx={{ mb: 2 }}
+            />
+
+            <TextField
+              fullWidth
+              label="New 6-Digit UPI PIN"
+              type={showNewPin ? 'text' : 'password'}
+              value={newPin}
+              onChange={(e) => setNewPin(e.target.value.replace(/[^0-9]/g, '').slice(0, 6))}
+              inputProps={{ maxLength: 6, inputMode: 'numeric', style: { letterSpacing: '4px', textAlign: 'center' } }}
+              InputProps={{
+                endAdornment: (
+                  <InputAdornment position="end">
+                    <IconButton size="small" onClick={() => setShowNewPin(!showNewPin)} edge="end">
+                      {showNewPin ? <VisibilityOffIcon fontSize="small" /> : <VisibilityIcon fontSize="small" />}
+                    </IconButton>
+                  </InputAdornment>
+                ),
+              }}
+              sx={{ mb: 2 }}
+            />
+
+            <TextField
+              fullWidth
+              label="Confirm New UPI PIN"
+              type="password"
+              value={confirmPin}
+              onChange={(e) => setConfirmPin(e.target.value.replace(/[^0-9]/g, '').slice(0, 6))}
+              inputProps={{ maxLength: 6, inputMode: 'numeric', style: { letterSpacing: '4px', textAlign: 'center' } }}
+              sx={{ mb: 1 }}
+            />
+          </DialogContent>
+
+          <DialogActions sx={{ px: 3, pb: 2 }}>
+            <Button onClick={() => setPinDialogOpen(false)} disabled={pinSaving} sx={{ textTransform: 'none' }}>
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              variant="contained"
+              disabled={pinSaving || newPin.length !== 6 || confirmPin.length !== 6 || currentPin.length !== 6}
+              startIcon={pinSaving ? <CircularProgress size={16} color="inherit" /> : <LockResetIcon />}
+              sx={{ textTransform: 'none', px: 3, fontWeight: 700 }}
+            >
+              {pinSaving ? 'Updating...' : 'Update PIN'}
+            </Button>
+          </DialogActions>
+        </form>
+      </Dialog>
     </Box>
   );
 }

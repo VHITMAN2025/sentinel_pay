@@ -10,9 +10,11 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 /**
  * FraudDetectionService — Core Fraud Analysis Orchestrator
@@ -21,7 +23,7 @@ import java.util.List;
  *
  *  ╔══════════════════════════════════════════════════════╗
  *  ║  LAYER 1 — Rule Engine (deterministic, <1ms)        ║
- *  ║  ├─ Amount threshold   → FRAUD if above limit       ║
+ *  ║  ├─ Amount threshold   → REVIEW if above limit      ║
  *  ║  ├─ Unknown location   → FRAUD if new for user      ║
  *  ║  └─ Transaction count  → FRAUD if velocity exceeded ║
  *  ╠══════════════════════════════════════════════════════╣
@@ -29,7 +31,7 @@ import java.util.List;
  *  ║  ├─ Impossible travel  → FRAUD (2 cities < Nmin)   ║
  *  ║  └─ Device change      → REVIEW (soft flag to AI)  ║
  *  ╠══════════════════════════════════════════════════════╣
- *  ║  LAYER 3 — Spring AI / OpenAI GPT                  ║
+ *  ║  LAYER 3 — Google Gemini                           ║
  *  ║  ├─ confidence > 0.6   → FRAUD                     ║
  *  ║  ├─ confidence 0.4–0.6 → REVIEW (human review)     ║
  *  ║  └─ confidence < 0.4   → SAFE                      ║
@@ -68,9 +70,13 @@ public class FraudDetectionService {
     @Autowired
     private RedisService redisService;
 
-    /** Spring AI service — OpenAI GPT integration */
+    /** AI service — Google Gemini integration */
     @Autowired
     private AiFraudAnalysisService aiFraudAnalysisService;
+
+    /** UPI Phishing & Brand Typosquatting Detector (Technique 1) */
+    @Autowired
+    private UpiPhishingDetector upiPhishingDetector;
 
     // ══════════════════════════════════════════════════════════════════════
     //  PUBLIC API
@@ -97,6 +103,22 @@ public class FraudDetectionService {
                 event.getLocation(),
                 event.getDevice());
 
+        // ─── ADMIN BLOCKLIST CHECK ───────────────────────────────────────
+        if (redisService.isBlocklisted(event.getUserId())
+                || redisService.isBlocklisted(event.getPayerUserId())
+                || redisService.isBlocklisted(event.getPayeeUpiId())
+                || redisService.isBlocklisted(event.getLocation())
+                || redisService.isBlocklisted(event.getDevice())) {
+            log.warn("[FRAUD ENGINE] BLOCKLIST HIT — Transaction: {} rejected by admin policy",
+                    event.getTransactionId());
+            return buildResult(event,
+                    FraudStatus.FRAUD,
+                    "Transaction blocked by Administrator Security Policy (Entity in Blocklist)",
+                    1.0,
+                    "ADMIN_BLOCKLIST",
+                    "This transaction was immediately rejected because the user, payee UPI, device, or location is blacklisted by the system administrator.");
+        }
+
         // Fetch existing user history ONCE before any layer runs.
         // Layer 1 (unknown-location rule) and Layer 2 (history analysis) both need it.
         // Previously, applyRules() called getHistory() internally and recordTransaction()
@@ -109,6 +131,9 @@ public class FraudDetectionService {
         if (ruleResult != null) {
             // Record transaction in history even if FRAUD (for future velocity/travel analysis)
             redisService.recordTransaction(event);
+            if (event.getPayeeUpiId() != null && !event.getPayeeUpiId().isBlank()) {
+                redisService.recordPayeeActivity(event.getPayeeUpiId(), event.getAmount());
+            }
             log.warn("[FRAUD ENGINE] RULE FRAUD → Transaction: {} flagged by rule engine | Elapsed: {}ms",
                     event.getTransactionId(), System.currentTimeMillis() - startMs);
             return ruleResult;
@@ -117,6 +142,9 @@ public class FraudDetectionService {
         // ─── LAYER 2: Redis History Analysis ─────────────────────────────
         // Record transaction and fetch enriched history (now includes current transaction)
         UserTransactionHistory history = redisService.recordTransaction(event);
+        if (event.getPayeeUpiId() != null && !event.getPayeeUpiId().isBlank()) {
+            redisService.recordPayeeActivity(event.getPayeeUpiId(), event.getAmount());
+        }
         FraudResult historyResult = analyzeHistory(event, history);
 
         if (historyResult != null && historyResult.getStatus() == FraudStatus.FRAUD) {
@@ -137,9 +165,9 @@ public class FraudDetectionService {
         }
 
         // ─── LAYER 3: AI Analysis ─────────────────────────────────────────
-        log.info("[FRAUD ENGINE] AI LAYER → sending transaction {} to OpenAI",
+        log.info("[FRAUD ENGINE] AI LAYER → sending transaction {} to Gemini",
                 event.getTransactionId());
-        FraudResult aiResult = aiFraudAnalysisService.analyze(event, history);
+        FraudResult aiResult = aiFraudAnalysisService.analyze(event, existingHistory);
 
         // If history flagged a soft anomaly and AI says SAFE, bump to REVIEW
         // so the borderline case is not silently cleared.
@@ -150,6 +178,13 @@ public class FraudDetectionService {
                     .reviewNotes(historyResult.getReason()
                             + " | AI returned SAFE but history flag overrides to REVIEW")
                     .build();
+        }
+
+        // When confirmed SAFE, whitelist location for future transactions
+        if (history != null && aiResult.getStatus() == FraudStatus.SAFE && event.getLocation() != null
+                && !event.getLocation().isBlank() && !"UNKNOWN".equalsIgnoreCase(event.getLocation().trim())) {
+            history.addKnownLocation(event.getLocation());
+            redisService.saveHistory(history);
         }
 
         log.info("[FRAUD ENGINE] FINAL → Transaction: {} | Status: {} | Confidence: {} | Layer: {} | Elapsed: {}ms",
@@ -182,25 +217,34 @@ public class FraudDetectionService {
     private FraudResult applyRules(TransactionEvent event, UserTransactionHistory existingHistory) {
 
         // ── Rule 1: High Amount Threshold ──────────────────────────────
-        // Configurable via: fraud.rules.high-amount-threshold (default: 10000)
-        if (event.getAmount().compareTo(fraudRules.getHighAmountThreshold()) > 0) {
-            log.warn("[RULE ENGINE] HIGH AMOUNT — Transaction: {} | Amount: {} > Threshold: {}",
+        BigDecimal effectiveThreshold = fraudRules.getHighAmountThreshold();
+        Map<String, Object> dyn = redisService.getDynamicRules();
+        if (dyn != null && dyn.get("highAmountThreshold") != null) {
+            try {
+                effectiveThreshold = new BigDecimal(dyn.get("highAmountThreshold").toString());
+            } catch (Exception ignored) {}
+        }
+
+        if (event.getAmount().compareTo(effectiveThreshold) > 0) {
+            log.warn("[RULE ENGINE] HIGH AMOUNT REVIEW — Transaction: {} | Amount: {} > Threshold: {}",
                     event.getTransactionId(),
                     event.getAmount(),
-                    fraudRules.getHighAmountThreshold());
+                    effectiveThreshold);
 
             return buildResult(event,
-                    FraudStatus.FRAUD,
-                    String.format("Amount %.2f INR exceeds the high-risk threshold of %.2f INR",
-                            event.getAmount(), fraudRules.getHighAmountThreshold()),
-                    1.0,
+                    FraudStatus.REVIEW,
+                    String.format("High-value payment of %.2f INR exceeds the %.2f INR review threshold; payer confirmation is required",
+                            event.getAmount(), effectiveThreshold),
+                    0.70,
                     "RULE_BASED",
-                    null);
+                    "High-value payments are held rather than automatically rejected. Confirm only if you recognise the recipient and intended amount.");
         }
 
         // ── Rule 2: Unknown Location ───────────────────────────────────
-        // Only checked when user has existing history (new users are not flagged here)
-        if (existingHistory != null && existingHistory.isUnknownLocation(event.getLocation())) {
+        // First transaction from a new city after the user already has a location
+        // baseline is a hard FRAUD signal. Missing / UNKNOWN location is ignored.
+        if (event.getLocation() != null && !event.getLocation().isBlank()
+                && existingHistory != null && existingHistory.isUnknownLocation(event.getLocation())) {
             log.warn("[RULE ENGINE] UNKNOWN LOCATION — User: {} | New: {} | Known: {}",
                     event.getUserId(),
                     event.getLocation(),
@@ -208,8 +252,7 @@ public class FraudDetectionService {
 
             return buildResult(event,
                     FraudStatus.FRAUD,
-                    String.format("Transaction from unrecognised location '%s'. "
-                                    + "User's known locations: %s",
+                    String.format("Transaction from unknown location '%s'. Known locations: %s",
                             event.getLocation(),
                             existingHistory.getKnownLocations()),
                     0.9,
@@ -218,11 +261,8 @@ public class FraudDetectionService {
         }
 
         // ── Rule 3: Transaction Velocity (frequency check) ─────────────
-        // Configurable via: fraud.rules.max-transactions-per-day (default: 10)
-        //
-        // Optimization: use existingHistory.size() instead of redisService.getTransactionCount().
-        // The history was already fetched from Redis at the top of analyzeTransaction() —
-        // calling getTransactionCount() would be a second Redis round-trip for the same data.
+        // Configurable via: fraud.rules.max-transactions-per-day (default: 10).
+        // More than 10 prior transactions in the 24h window → this attempt is FRAUD.
         int txCount = (existingHistory != null && existingHistory.getRecentTransactions() != null)
                 ? existingHistory.getRecentTransactions().size()
                 : 0;
@@ -234,13 +274,65 @@ public class FraudDetectionService {
 
             return buildResult(event,
                     FraudStatus.FRAUD,
-                    String.format("Transaction velocity exceeded: %d transactions in 24h window "
-                                    + "(limit: %d). Possible card compromise or bot activity.",
+                    String.format("High velocity: %d transactions already in the 24h window "
+                                    + "(limit: %d). This attempt exceeds the daily frequency rule.",
                             txCount,
                             fraudRules.getMaxTransactionsPerDay()),
                     0.85,
                     "RULE_BASED",
                     null);
+        }
+
+        // ── Rule 4: UPI Phishing & Brand Typosquatting (Technique 1) ───
+        if (event.getPayeeUpiId() != null && !event.getPayeeUpiId().isBlank() && upiPhishingDetector != null) {
+            UpiPhishingDetector.PhishingCheckResult phishingCheck =
+                    upiPhishingDetector.checkPayeeUpi(event.getPayeeUpiId());
+            if (phishingCheck.isFlagged()) {
+                log.warn("[RULE ENGINE] PHISHING FRAUD — Transaction: {} | Payee: {} | Reason: {}",
+                        event.getTransactionId(), event.getPayeeUpiId(), phishingCheck.getReason());
+
+                return buildResult(event,
+                        FraudStatus.FRAUD,
+                        phishingCheck.getReason(),
+                        phishingCheck.getConfidenceScore(),
+                        "UPI_PHISHING_DETECTOR",
+                        "Phishing & brand impersonation attempt detected via fuzzy string matching and heuristics.");
+            }
+        }
+
+        // ── Rule 5: Payee Cold-Start Surge & Mule Account (Technique 3) ─
+        if (event.getPayeeUpiId() != null && !event.getPayeeUpiId().isBlank() && redisService != null) {
+            com.fraud.detection.model.PayeeStats payeeStats = redisService.getPayeeStats(event.getPayeeUpiId());
+            if (payeeStats != null) {
+                int recentHourlyCount = payeeStats.getRecentTimestamps() != null ? payeeStats.getRecentTimestamps().size() : 0;
+                int lifetimeCount = payeeStats.getTotalReceivedCount();
+
+                // Mule Surge: Cold-start payee receiving high velocity (> 3 payments in last hour)
+                if (lifetimeCount <= 5 && recentHourlyCount >= 3) {
+                    log.warn("[RULE ENGINE] MULE SURGE — Payee: {} | Lifetime: {} | RecentHour: {}",
+                            event.getPayeeUpiId(), lifetimeCount, recentHourlyCount);
+                    return buildResult(event,
+                            FraudStatus.FRAUD,
+                            String.format("Cold-start payee velocity surge detected for '%s' (%d rapid payments in 1 hour on a newly active account). Flagged as money mule activity.",
+                                    event.getPayeeUpiId(), recentHourlyCount + 1),
+                            0.90,
+                            "MULE_SURGE_DETECTOR",
+                            "Rapid incoming velocity surge on an account with little or no prior history indicates mule aggregation.");
+                }
+
+                // Cold-Start High Value Inflow: Payee with <= 1 prior transaction receiving > ₹5,000
+                if (lifetimeCount <= 1 && event.getAmount() != null && event.getAmount().compareTo(new BigDecimal("5000.00")) > 0) {
+                    log.warn("[RULE ENGINE] COLD-START INFLOW — Payee: {} | Amount: {}",
+                            event.getPayeeUpiId(), event.getAmount());
+                    return buildResult(event,
+                            FraudStatus.REVIEW,
+                            String.format("Payee '%s' is a new cold-start account receiving a large first-time payment of %.2f INR (> 5,000 INR threshold). Requires payer confirmation.",
+                                    event.getPayeeUpiId(), event.getAmount()),
+                            0.75,
+                            "COLD_START_DETECTOR",
+                            "Verify the recipient identity before confirming payment to a newly active account.");
+                }
+            }
         }
 
         log.debug("[RULE ENGINE] PASSED — All rules cleared for transaction: {}",
@@ -343,11 +435,12 @@ public class FraudDetectionService {
      * so we skip the check whenever either side is "UNKNOWN".
      */
     private boolean isDifferentLocation(TransactionEvent previous, TransactionEvent current) {
-        return previous.getLocation() != null
-                && current.getLocation() != null
-                && !previous.getLocation().equalsIgnoreCase("UNKNOWN")
-                && !current.getLocation().equalsIgnoreCase("UNKNOWN")
-                && !previous.getLocation().equalsIgnoreCase(current.getLocation());
+        if (previous.getLocation() == null || current.getLocation() == null) return false;
+        if ("UNKNOWN".equalsIgnoreCase(previous.getLocation().trim()) ||
+            "UNKNOWN".equalsIgnoreCase(current.getLocation().trim())) {
+            return false;
+        }
+        return !UserTransactionHistory.areLocationsEquivalent(previous.getLocation(), current.getLocation());
     }
 
     /**

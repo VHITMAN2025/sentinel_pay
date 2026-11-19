@@ -39,8 +39,35 @@ describe('FraudExplanation', () => {
 
   test('renders SAFE verdict', () => {
     render(<FraudExplanation result={SAFE} />);
-    expect(screen.getByText(/approved/i)).toBeInTheDocument();
-    expect(screen.getByText('Safe')).toBeInTheDocument();
+    expect(screen.getByText('Transaction approved')).toBeInTheDocument();
+    expect(screen.getAllByText('Safe').length).toBeGreaterThan(0);
+  });
+
+  test('does not report risk factors when a SAFE reason mentions normal transaction signals', () => {
+    const safeWithNormalSignals = {
+      ...SAFE,
+      reason: 'The transaction aligns with all known user behaviour patterns in amount, location, device, and category.',
+    };
+
+    render(<FraudExplanation result={safeWithNormalSignals} />);
+
+    expect(screen.queryByText('Risk Factors Detected')).not.toBeInTheDocument();
+    expect(screen.queryByText('Unusual Amount')).not.toBeInTheDocument();
+    expect(screen.queryByText('Location Anomaly')).not.toBeInTheDocument();
+    expect(screen.queryByText('Device Mismatch')).not.toBeInTheDocument();
+    expect(screen.queryByText('Behavioral Anomaly')).not.toBeInTheDocument();
+  });
+
+  test('does not infer risk factors from a review caused by missing history', () => {
+    const firstTransactionReview = {
+      ...REVIEW,
+      fraudStatus: 'REVIEW',
+      reason: "This is the user's first transaction, lacking historical data for comparison, hence requiring review.",
+    };
+
+    render(<FraudExplanation result={firstTransactionReview} />);
+
+    expect(screen.queryByText('Risk Factors Detected')).not.toBeInTheDocument();
   });
 
   test('renders FRAUD verdict with blocked headline', () => {
@@ -51,7 +78,8 @@ describe('FraudExplanation', () => {
 
   test('renders REVIEW verdict', () => {
     render(<FraudExplanation result={REVIEW} />);
-    expect(screen.getByText(/under review/i)).toBeInTheDocument();
+    expect(screen.getByText('Transaction flagged for manual review')).toBeInTheDocument();
+    expect(screen.getByText(/no money has moved/i)).toBeInTheDocument();
   });
 
   test('shows review notes when present', () => {
@@ -64,9 +92,16 @@ describe('FraudExplanation', () => {
     expect(screen.getByText('91%')).toBeInTheDocument();
   });
 
+  test('shows an unavailable risk estimate instead of zero when no score exists', () => {
+    render(<FraudExplanation result={{ ...REVIEW, confidenceScore: null }} />);
+    expect(screen.getByText('Estimated fraud risk')).toBeInTheDocument();
+    expect(screen.getByText('Unavailable')).toBeInTheDocument();
+    expect(screen.queryByText('0%')).not.toBeInTheDocument();
+  });
+
   test('shows AI detection layer label', () => {
     render(<FraudExplanation result={FRAUD} />);
-    expect(screen.getByText(/AI \/ ML Model/i)).toBeInTheDocument();
+    expect(screen.getByText('Google Gemini')).toBeInTheDocument();
   });
 
   test('shows RULE_BASED detection layer', () => {

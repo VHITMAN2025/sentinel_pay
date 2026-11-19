@@ -35,8 +35,7 @@ import java.math.BigDecimal;
 @AllArgsConstructor
 public class TransactionRequest {
 
-    /** Required — unique transaction identifier (UUID or custom) */
-    @NotBlank(message = "transactionId must not be blank")
+    /** Optional — unique transaction identifier. Auto-generated as UUID if omitted */
     private String transactionId;
 
     /** Required — user who initiated the transaction */

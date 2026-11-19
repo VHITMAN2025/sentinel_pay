@@ -20,7 +20,7 @@ import {
   TextField, Button, MenuItem, Select, FormControl,
   InputLabel, CircularProgress, Divider,
   Collapse, Alert, Tabs, Tab,
-  FormHelperText,
+  FormHelperText, Dialog, DialogActions, DialogContent, DialogTitle,
 } from '@mui/material';
 import SendIcon          from '@mui/icons-material/Send';
 import PaymentIcon       from '@mui/icons-material/Payment';
@@ -43,12 +43,22 @@ import FraudExplanation      from '../components/fraud/FraudExplanation';
 import TransactionTimeline   from '../components/fraud/TransactionTimeline';
 
 import { sendUpiPayment, pollTransactionStatus } from '../api/transactionApi';
-import { fetchFraudResultWithRetry }               from '../api/fraudApi';
+import { fetchFraudResultWithRetry, getReviewDecision, submitReviewDecision } from '../api/fraudApi';
 import { getAccountByUpiId }                       from '../api/bankApi';
 import { createAbortController }                   from '../api/axiosConfig';
 import { formatCurrency, formatDateTime, normalizeTxRecord } from '../utils/formatters';
 
 const PAYMENT_MODES = ['BANK', 'RAZORPAY'];
+const MERCHANT_CATEGORIES = ['Food', 'Electronics', 'Travel', 'Healthcare', 'Entertainment', 'Utilities', 'Other'];
+const DEMO_SCENARIOS = [
+  { value: 'LIVE', label: 'Live detection (automatic context)' },
+  { value: 'TYPOSQUATTING', label: 'Demo: Brand Typosquatting (amazonn@upi)' },
+  { value: 'PHISHING', label: 'Demo: Phishing Impersonation (amazon_refund@upi)' },
+  { value: 'MULE_SURGE', label: 'Demo: Mule Velocity Surge (mule_receiver@upi)' },
+  { value: 'COLD_START_HIGH', label: 'Demo: Cold-Start High Inflow (fresh_payee@upi - ₹15,000)' },
+  { value: 'NEW_DEVICE', label: 'Demo: Device anomaly (REVIEW)' },
+  { value: 'REMOTE_LOCATION', label: 'Demo: Remote location (London, UK)' },
+];
 const POLL_INTERVAL = parseInt(process.env.REACT_APP_POLL_INTERVAL_MS || '3000', 10);
 const POLL_ATTEMPTS = parseInt(process.env.REACT_APP_POLL_MAX_ATTEMPTS || '15', 10);
 
@@ -64,15 +74,41 @@ const UPI_RULES = {
     max:       { value: 1000000, message: 'Maximum amount is ₹10,00,000' },
     validate:  (v) => !isNaN(parseFloat(v)) || 'Must be a valid number',
   },
+  upiPin: {
+    required:  'UPI PIN is required to authorize payment',
+    pattern:   { value: /^[0-9]{6}$/, message: 'UPI PIN must be exactly 6 digits' },
+  },
 };
+
+function detectDeviceContext() {
+  const platform = navigator.userAgentData?.platform || navigator.platform || 'Unknown platform';
+  const browser = /Edg\//.test(navigator.userAgent) ? 'Edge'
+    : /Chrome\//.test(navigator.userAgent) ? 'Chrome'
+      : /Firefox\//.test(navigator.userAgent) ? 'Firefox'
+        : /Safari\//.test(navigator.userAgent) ? 'Safari' : 'Browser';
+  return `${platform} · ${browser}`.slice(0, 120);
+}
+
+function timezoneLocation() {
+  const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return zone ? `Timezone: ${zone}` : 'Timezone unavailable';
+}
 
 export default function Dashboard() {
   const { user }                       = useAuth();
-  const { stats, recordTransaction }   = useAppState();
+  const { stats, recordTransaction, refreshBalance } = useAppState();
 
   // Form
-  const { control, register, handleSubmit, reset, watch, formState: { errors } } =
-    useForm({ defaultValues: { payeeUpiId: '', amount: '', paymentMode: 'BANK' } });
+  const { control, register, handleSubmit, reset, watch, setValue, formState: { errors } } =
+    useForm({
+      defaultValues: {
+        payeeUpiId: '',
+        amount: '',
+        merchantCategory: 'Food',
+        paymentMode: 'BANK',
+        upiPin: '212006',
+      },
+    });
 
   // State
   const [payeeInfo,     setPayeeInfo]     = useState(null);
@@ -83,6 +119,39 @@ export default function Dashboard() {
   const [fraudPolling,  setFraudPolling]  = useState(false);
   const [result,        setResult]        = useState(null);
   const [resultTab,     setResultTab]     = useState(0);  // 0 = Explanation, 1 = Timeline
+  const [reviewDecision, setReviewDecision] = useState(null);
+  const [approvalDialogOpen, setApprovalDialogOpen] = useState(false);
+  const [reviewActionLoading, setReviewActionLoading] = useState(false);
+  const [deviceContext] = useState(detectDeviceContext);
+  const [locationContext, setLocationContext] = useState(timezoneLocation);
+  const [locationStatus, setLocationStatus] = useState('Using timezone fallback');
+  const [demoScenario, setDemoScenario] = useState('LIVE');
+  const [paymentError, setPaymentError] = useState('');
+
+  const handleScenarioChange = (scenarioValue) => {
+    setDemoScenario(scenarioValue);
+    setPaymentError('');
+    if (scenarioValue === 'TYPOSQUATTING') {
+      setValue('payeeUpiId', 'amazonn@upi');
+      setValue('amount', '1500');
+      setValue('merchantCategory', 'Electronics');
+    } else if (scenarioValue === 'PHISHING') {
+      setValue('payeeUpiId', 'amazon_refund@upi');
+      setValue('amount', '2500');
+      setValue('merchantCategory', 'Other');
+    } else if (scenarioValue === 'MULE_SURGE') {
+      setValue('payeeUpiId', 'mule_receiver@upi');
+      setValue('amount', '800');
+      setValue('merchantCategory', 'Other');
+    } else if (scenarioValue === 'COLD_START_HIGH') {
+      setValue('payeeUpiId', 'fresh_payee@upi');
+      setValue('amount', '15000');
+      setValue('merchantCategory', 'Electronics');
+    } else if (scenarioValue === 'LIVE') {
+      setValue('payeeUpiId', '');
+      setValue('amount', '');
+    }
+  };
 
   const payeeUpiId      = watch('payeeUpiId');
   const lookupAbort     = useRef(null);
@@ -100,6 +169,23 @@ export default function Dashboard() {
       // Cancel any in-flight fraud poll when the component unmounts
       fraudPollAbort.current?.abort();
     };
+  }, []);
+
+  // Device data is derived from the browser. Location uses the browser's
+  // permission-based Geolocation API; if permission is unavailable, the app
+  // uses a truthful timezone fallback rather than asking the payer to type data.
+  useEffect(() => {
+    if (!navigator.geolocation) return;
+    setLocationStatus('Detecting location…');
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => {
+        const location = `Geo: ${coords.latitude.toFixed(2)}, ${coords.longitude.toFixed(2)}`;
+        setLocationContext(location);
+        setLocationStatus('Approximate browser location detected');
+      },
+      () => setLocationStatus('Location permission unavailable — using timezone fallback'),
+      { enableHighAccuracy: false, timeout: 7000, maximumAge: 300000 },
+    );
   }, []);
 
   // ── Payee lookup on blur ──────────────────────────────────────────────────
@@ -126,19 +212,31 @@ export default function Dashboard() {
   const onSubmit = async (formData) => {
     setSubmitting(true);
     setResult(null);
+    setReviewDecision(null);
+    setApprovalDialogOpen(false);
     setResultTab(0);
+    setPaymentError('');
 
     try {
+      let device = deviceContext;
+      let location = locationContext;
+      if (demoScenario === 'NEW_DEVICE') {
+        device = `${deviceContext} · Demo new device`;
+      } else if (demoScenario === 'REMOTE_LOCATION') {
+        location = 'Demo remote location: London';
+      }
+
       // Step 1: Submit payment (202 Accepted — queues Kafka event).
-      // device / location / merchantCategory are required by the fraud-detection
-      // ML pipeline; omitting them causes the backend to default to REVIEW.
+      // Device and location are automatically derived from the browser. The
+      // explicit demo modes only alter them to demonstrate fraud controls.
       const resp = await sendUpiPayment({
         payeeUpiId:       formData.payeeUpiId.trim(),
         amount:           parseFloat(formData.amount),
-        device:           'mobile',
-        location:         'chennai',
-        merchantCategory: formData.merchantCategory || 'grocery',
+        device,
+        location,
+        merchantCategory: formData.merchantCategory,
         paymentMode:      formData.paymentMode,
+        upiPin:           formData.upiPin || '212006',
       });
       const txId = resp.transactionId;
       toast.success(`Payment submitted — ID: ${txId}`);
@@ -208,9 +306,20 @@ export default function Dashboard() {
       );
 
       setResult(txRecord);
+      if (txRecord.fraudStatus === 'REVIEW') {
+        try {
+          setReviewDecision(await getReviewDecision(txId));
+        } catch (decisionError) {
+          toast.error(decisionError.response?.data?.message
+            || 'Could not load the review action. You can retry from Fraud Alerts.');
+        }
+      }
 
       // Step 5: Push to global state — updates Fraud Alerts, Analytics, and Stats
       recordTransaction(txRecord);
+      if (txRecord.overallStatus === 'COMPLETE') {
+        refreshBalance();
+      }
 
       // Step 6: Toast verdict
       if (txRecord.fraudStatus === 'FRAUD') {
@@ -221,17 +330,64 @@ export default function Dashboard() {
         toast.success('Payment completed successfully!');
       }
 
-      reset();
+      reset({ payeeUpiId: '', amount: '', merchantCategory: 'Food', paymentMode: 'BANK' });
       setPayeeInfo(null);
     } catch (err) {
       if (isMountedRef.current) {
-        toast.error(err.message || 'Payment submission failed');
+        const errorMsg =
+          err.response?.data?.message ||
+          err.response?.data?.error ||
+          err.message ||
+          'Payment submission failed';
+        setPaymentError(errorMsg);
+        toast.error(errorMsg);
       }
     } finally {
       if (isMountedRef.current) {
         setSubmitting(false);
         setPolling(false);
       }
+    }
+  };
+
+  const handleReviewDecision = async (decision) => {
+    if (!result?.transactionId || reviewActionLoading) return;
+    setApprovalDialogOpen(false);
+    setReviewActionLoading(true);
+    try {
+      const saved = await submitReviewDecision(result.transactionId, decision);
+      setReviewDecision(saved);
+
+      if (decision === 'APPROVE') {
+        const paymentStatus = await pollTransactionStatus(
+          result.transactionId, POLL_ATTEMPTS, POLL_INTERVAL,
+        );
+        const updated = {
+          ...result,
+          ...paymentStatus,
+          fraudStatus: result.fraudStatus,
+          confidenceScore: result.confidenceScore,
+          detectionLayer: result.detectionLayer,
+          reason: result.reason,
+        };
+        setResult(updated);
+        recordTransaction(updated);
+        if (paymentStatus.paymentStatus === 'SUCCESS'
+            || paymentStatus.overallStatus === 'COMPLETE') {
+          setReviewDecision({ ...saved, paymentStatus: 'SUCCESS' });
+          refreshBalance();
+          toast.success('Payment sent successfully. The recipient has been credited.');
+        } else {
+          toast.error(paymentStatus.paymentFailureReason
+            || `Approval recorded, but payment status is ${paymentStatus.paymentStatus || 'still processing'}.`);
+        }
+      } else {
+        toast.success('Payment cancelled. No money was moved.');
+      }
+    } catch (error) {
+      toast.error(error.response?.data?.message || error.message || 'Could not process your review decision');
+    } finally {
+      setReviewActionLoading(false);
     }
   };
 
@@ -310,13 +466,58 @@ export default function Dashboard() {
                   type="number"
                   {...register('amount', UPI_RULES.amount)}
                   error={!!errors.amount}
-                  helperText={errors.amount?.message || 'Amounts above ₹10,000 trigger fraud review'}
+                  helperText={errors.amount?.message || 'Payments above ₹10,000 require your confirmation before funds move'}
                   sx={{ mb: 1.5 }}
                   inputProps={{ min: 1, step: '0.01' }}
                 />
 
+                <Alert severity="info" sx={{ mb: 1.5, borderRadius: 2 }}>
+                  <Typography variant="body2" fontWeight={700}>Fraud context is detected automatically</Typography>
+                  <Typography variant="caption" display="block">
+                    Device: {deviceContext}
+                  </Typography>
+                  <Typography variant="caption" display="block">
+                    Location: {locationContext} · {locationStatus}
+                  </Typography>
+                </Alert>
+
+                <FormControl fullWidth sx={{ mb: 1.5 }}>
+                  <InputLabel>Demo Scenario</InputLabel>
+                  <Select
+                    value={demoScenario}
+                    label="Demo Scenario"
+                    onChange={(event) => handleScenarioChange(event.target.value)}
+                  >
+                    {DEMO_SCENARIOS.map((scenario) => (
+                      <MenuItem key={scenario.value} value={scenario.value}>{scenario.label}</MenuItem>
+                    ))}
+                  </Select>
+                  <FormHelperText>
+                    Demo modes are explicit simulations. For remote-location blocking, first complete one LIVE safe payment.
+                  </FormHelperText>
+                </FormControl>
+
+                <FormControl fullWidth sx={{ mb: 1.5 }} error={!!errors.merchantCategory}>
+                  <InputLabel>Merchant Category</InputLabel>
+                  <Controller
+                    name="merchantCategory"
+                    control={control}
+                    rules={{ required: 'Merchant category is required for fraud analysis' }}
+                    render={({ field }) => (
+                      <Select {...field} label="Merchant Category">
+                        {MERCHANT_CATEGORIES.map((category) => (
+                          <MenuItem key={category} value={category}>{category}</MenuItem>
+                        ))}
+                      </Select>
+                    )}
+                  />
+                  {errors.merchantCategory && (
+                    <FormHelperText>{errors.merchantCategory.message}</FormHelperText>
+                  )}
+                </FormControl>
+
                 {/* Payment mode */}
-                <FormControl fullWidth sx={{ mb: 3 }}>
+                <FormControl fullWidth sx={{ mb: 2 }}>
                   <InputLabel>Payment Mode</InputLabel>
                   <Controller
                     name="paymentMode"
@@ -330,6 +531,30 @@ export default function Dashboard() {
                     )}
                   />
                 </FormControl>
+
+                {/* 6-Digit UPI PIN */}
+                <TextField
+                  fullWidth
+                  label="6-Digit UPI PIN"
+                  type="password"
+                  placeholder="212006"
+                  {...register('upiPin', UPI_RULES.upiPin)}
+                  error={!!errors.upiPin}
+                  helperText={errors.upiPin?.message || 'Default UPI PIN: 212006 (Change anytime in Profile)'}
+                  inputProps={{
+                    maxLength: 6,
+                    inputMode: 'numeric',
+                    pattern: '[0-9]*',
+                    style: { letterSpacing: '4px', fontWeight: 700 },
+                  }}
+                  sx={{ mb: 3 }}
+                />
+
+                {paymentError && (
+                  <Alert severity="error" sx={{ mb: 2, borderRadius: 2 }}>
+                    {paymentError}
+                  </Alert>
+                )}
 
                 <Button
                   type="submit"
@@ -375,10 +600,57 @@ export default function Dashboard() {
                     </Box>
                   </Box>
 
+                  {result.fraudStatus === 'REVIEW' && (
+                    <Alert severity="warning" sx={{ mx: 3, mt: 2, borderRadius: 2 }}>
+                      <Typography variant="subtitle2" fontWeight={700} gutterBottom>
+                        This payment is waiting for your decision
+                      </Typography>
+                      <Typography variant="body2" sx={{ mb: 1.5 }}>
+                        No money has moved. If you recognize this payment, approve it to debit your simulated bank account and credit the recipient. This overrides the REVIEW hold for this payment only. FRAUD verdicts cannot be approved here.
+                      </Typography>
+                      {reviewDecision?.decision === 'APPROVE' ? (
+                        <Typography variant="body2" fontWeight={700}>
+                          {reviewDecision.paymentStatus === 'SUCCESS'
+                            ? 'Approved — payment completed and recipient credited.'
+                            : `Approval recorded${reviewDecision.paymentStatus
+                              ? ` — payment ${reviewDecision.paymentStatus.toLowerCase()}.`
+                              : '; checking payment status…'}`}
+                        </Typography>
+                      ) : reviewDecision?.decision === 'CANCEL' ? (
+                        <Typography variant="body2" fontWeight={700}>
+                          You cancelled this payment. No money was moved.
+                        </Typography>
+                      ) : (
+                        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                          <Button
+                            size="small"
+                            variant="contained"
+                            color="warning"
+                            startIcon={<CheckCircleIcon />}
+                            disabled={reviewActionLoading}
+                            onClick={() => setApprovalDialogOpen(true)}
+                          >
+                            Approve &amp; send
+                          </Button>
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            color="inherit"
+                            disabled={reviewActionLoading}
+                            onClick={() => handleReviewDecision('CANCEL')}
+                          >
+                            Cancel payment
+                          </Button>
+                          {reviewActionLoading && <CircularProgress size={18} />}
+                        </Box>
+                      )}
+                    </Alert>
+                  )}
+
                   {/* Risk gauge + key metadata */}
                   <Box sx={{ px: 3, py: 1.5, display: 'flex', gap: 2, alignItems: 'center', borderBottom: '1px solid', borderColor: 'divider' }}>
                     <RiskGauge
-                      score={result.confidenceScore ?? (result.fraudStatus === 'FRAUD' ? 0.85 : result.fraudStatus === 'REVIEW' ? 0.5 : 0.1)}
+                      score={result.confidenceScore}
                       size={0.75}
                     />
                     <Box sx={{ flexGrow: 1 }}>
@@ -472,6 +744,31 @@ export default function Dashboard() {
           )}
         </Grid>
       </Grid>
+
+      <Dialog open={approvalDialogOpen} onClose={() => setApprovalDialogOpen(false)}>
+        <DialogTitle>Approve and send this payment?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ mb: 1 }}>
+            This explicitly overrides the automated REVIEW hold. SentinelPay will attempt to debit your simulated bank account and credit the recipient.
+          </Typography>
+          <Typography variant="body2" color="text.secondary">
+            {formatCurrency(result?.amount)} to {result?.payeeUpiId || 'the selected UPI recipient'}
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setApprovalDialogOpen(false)} disabled={reviewActionLoading}>
+            Go back
+          </Button>
+          <Button
+            variant="contained"
+            color="warning"
+            disabled={reviewActionLoading}
+            onClick={() => handleReviewDecision('APPROVE')}
+          >
+            {reviewActionLoading ? 'Sending…' : 'Confirm & send'}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* ── Charts + Activity feed ────────────────────────────────────────── */}
       <Grid container spacing={3}>

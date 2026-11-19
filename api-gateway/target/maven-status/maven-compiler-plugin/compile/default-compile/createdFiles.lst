@@ -1,2 +1,4 @@
 com\fraud\gateway\config\GatewayConfig.class
+com\fraud\gateway\filter\JwtAuthFilter.class
+com\fraud\gateway\config\JwtConfig.class
 com\fraud\gateway\ApiGatewayApplication.class

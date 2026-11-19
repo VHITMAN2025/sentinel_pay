@@ -167,6 +167,10 @@ public class TransactionConsumer {
             // ── Step 6: Payment Processing (SAFE only) ───────────────────────
             if (FraudStatus.SAFE == result.getStatus()) {
                 tryPayment(event);
+            } else if (FraudStatus.REVIEW == result.getStatus()) {
+                redisService.saveReviewTransaction(event);
+                log.info("[TX-LIFECYCLE] REVIEW awaiting payer decision txId={}",
+                        event.getTransactionId());
             } else {
                 log.info("[TX-LIFECYCLE] BLOCKED txId={} status={} — no money movement",
                         event.getTransactionId(), result.getStatus());

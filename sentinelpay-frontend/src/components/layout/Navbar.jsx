@@ -1,15 +1,8 @@
 /**
- * Navbar.jsx — Top navigation bar (V3)
+ * Navbar.jsx — Top navigation bar (V4)
  *
- * V3 additions:
- *  - Dark / light mode toggle button (calls ThemeContext.toggleTheme)
- *  - DarkModeIcon / LightModeIcon swap based on current mode
- *
- * V2 features retained:
- *  - GlobalErrorBanner below AppBar when globalError is set
- *  - Unread alert badge on bell icon
- *  - Admin badge shown when user.role === ADMIN
- *  - Logout clears both auth and app state
+ * Modern glassmorphism bar with adaptive dark/light styling,
+ * clear typography, and accessible contrasts.
  */
 
 import React, { useState } from 'react';
@@ -56,36 +49,67 @@ export default function Navbar({ drawerWidth, onMenuClick }) {
     ? user.name.split(' ').map((w) => w[0]).join('').toUpperCase().slice(0, 2)
     : '?';
 
+  const isDark = mode === 'dark';
+
   return (
     <>
       <AppBar
         position="fixed"
         elevation={0}
         sx={{
-          width:   { md: `calc(100% - ${drawerWidth}px)` },
-          ml:      { md: `${drawerWidth}px` },
-          bgcolor: 'primary.main',
-          borderBottom: '1px solid rgba(255,255,255,0.12)',
+          width: { md: `calc(100% - ${drawerWidth}px)` },
+          ml:    { md: `${drawerWidth}px` },
+          bgcolor: isDark ? 'rgba(17, 24, 39, 0.85)' : 'rgba(255, 255, 255, 0.85)',
+          backdropFilter: 'blur(12px)',
+          borderBottom: isDark ? '1px solid rgba(255, 255, 255, 0.08)' : '1px solid #e2e8f0',
+          color: 'text.primary',
         }}
       >
-        <Toolbar>
+        <Toolbar sx={{ minHeight: 64 }}>
           {/* Mobile hamburger */}
-          <IconButton color="inherit" edge="start" onClick={onMenuClick} sx={{ mr: 2, display: { md: 'none' } }}>
+          <IconButton
+            edge="start"
+            onClick={onMenuClick}
+            sx={{ mr: 2, display: { md: 'none' }, color: 'text.primary' }}
+          >
             <MenuIcon />
           </IconButton>
 
-          {/* Brand */}
-          <SecurityIcon sx={{ mr: 1, fontSize: 28 }} />
-          <Typography variant="h6" noWrap sx={{ fontWeight: 700, flexGrow: 1, letterSpacing: '-0.3px' }}>
-            SentinelPay
-          </Typography>
+          {/* Brand Shield & Title */}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexGrow: 1 }}>
+            <SecurityIcon sx={{ color: 'primary.main', fontSize: 28 }} />
+            <Typography variant="h6" noWrap sx={{ fontWeight: 800, color: 'text.primary', letterSpacing: '-0.3px' }}>
+              SentinelPay
+            </Typography>
+            <Typography
+              variant="caption"
+              sx={{
+                display: { xs: 'none', sm: 'inline-block' },
+                bgcolor: isDark ? 'rgba(99, 102, 241, 0.15)' : 'rgba(37, 99, 235, 0.1)',
+                color: 'primary.main',
+                px: 1, py: 0.25,
+                borderRadius: 1,
+                fontWeight: 700,
+                fontSize: '0.6875rem',
+                ml: 1,
+              }}
+            >
+              REAL-TIME AI FRAUD DEFENSE
+            </Typography>
+          </Box>
 
           {/* Admin badge */}
           {isAdmin && (
             <Chip
               label="ADMIN"
               size="small"
-              sx={{ mr: 1.5, bgcolor: 'rgba(255,255,255,0.2)', color: 'white', fontWeight: 700, fontSize: '0.7rem' }}
+              color="primary"
+              sx={{
+                mr: 1.5,
+                fontWeight: 800,
+                fontSize: '0.7rem',
+                letterSpacing: '0.05em',
+              }}
             />
           )}
 
@@ -94,27 +118,55 @@ export default function Navbar({ drawerWidth, onMenuClick }) {
             <Chip
               label={user.upiId}
               size="small"
-              sx={{ mr: 2, bgcolor: 'rgba(255,255,255,0.15)', color: 'white', fontSize: '0.72rem', fontWeight: 600, display: { xs: 'none', sm: 'flex' } }}
+              variant="outlined"
+              sx={{
+                mr: 1.5,
+                fontWeight: 600,
+                fontSize: '0.75rem',
+                display: { xs: 'none', sm: 'flex' },
+                borderColor: isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.15)',
+              }}
             />
           )}
 
           {/* Dark/Light mode toggle */}
-          <Tooltip title={mode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}>
-            <IconButton color="inherit" onClick={toggleTheme} sx={{ mr: 0.5 }} aria-label="toggle dark mode">
-              {mode === 'dark' ? <LightModeIcon /> : <DarkModeIcon />}
+          <Tooltip title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}>
+            <IconButton
+              onClick={toggleTheme}
+              sx={{ mr: 0.5, color: 'text.secondary', '&:hover': { color: 'text.primary' } }}
+              aria-label="toggle dark mode"
+            >
+              {isDark ? <LightModeIcon sx={{ color: '#fbbf24' }} /> : <DarkModeIcon />}
             </IconButton>
           </Tooltip>
 
           {/* Notification bell */}
-          <IconButton color="inherit" sx={{ mr: 1 }} onClick={() => navigate('/fraud-alerts')} aria-label="fraud alerts">
-            <Badge badgeContent={unreadAlerts} color="error" max={9}>
-              <NotificationsIcon />
-            </Badge>
-          </IconButton>
+          <Tooltip title="Fraud Alerts">
+            <IconButton
+              sx={{ mr: 1, color: 'text.secondary', '&:hover': { color: 'text.primary' } }}
+              onClick={() => navigate('/fraud-alerts')}
+              aria-label="fraud alerts"
+            >
+              <Badge badgeContent={unreadAlerts} color="error" max={9}>
+                <NotificationsIcon />
+              </Badge>
+            </IconButton>
+          </Tooltip>
 
           {/* Avatar dropdown */}
-          <IconButton onClick={handleMenuOpen} size="small">
-            <Avatar sx={{ width: 36, height: 36, bgcolor: 'secondary.main', fontSize: '0.875rem', fontWeight: 700 }}>
+          <IconButton onClick={handleMenuOpen} size="small" sx={{ ml: 0.5 }}>
+            <Avatar
+              sx={{
+                width: 38,
+                height: 38,
+                background: 'linear-gradient(135deg, #6366f1 0%, #3b82f6 100%)',
+                color: '#ffffff',
+                fontSize: '0.875rem',
+                fontWeight: 700,
+                border: '2px solid',
+                borderColor: isDark ? 'rgba(255,255,255,0.1)' : '#ffffff',
+              }}
+            >
               {initials}
             </Avatar>
           </IconButton>
@@ -125,13 +177,21 @@ export default function Navbar({ drawerWidth, onMenuClick }) {
             onClose={handleMenuClose}
             transformOrigin={{ horizontal: 'right', vertical: 'top' }}
             anchorOrigin={{ horizontal: 'right', vertical: 'bottom' }}
-            PaperProps={{ elevation: 4, sx: { mt: 1, minWidth: 220, borderRadius: 2 } }}
+            PaperProps={{
+              elevation: 4,
+              sx: {
+                mt: 1.5,
+                minWidth: 230,
+                borderRadius: 2.5,
+                border: isDark ? '1px solid rgba(255,255,255,0.08)' : '1px solid #e2e8f0',
+              },
+            }}
           >
             <Box sx={{ px: 2, py: 1.5 }}>
-              <Typography variant="subtitle2" fontWeight={700}>{user?.name}</Typography>
-              <Typography variant="caption" color="text.secondary">{user?.email}</Typography>
+              <Typography variant="subtitle2" fontWeight={700} color="text.primary">{user?.name}</Typography>
+              <Typography variant="caption" color="text.secondary" display="block">{user?.email}</Typography>
               {isAdmin && (
-                <Chip label="Admin" size="small" color="primary" sx={{ mt: 0.5, height: 18, fontSize: '0.65rem' }} />
+                <Chip label="Administrator" size="small" color="primary" sx={{ mt: 0.75, height: 20, fontSize: '0.6875rem', fontWeight: 700 }} />
               )}
             </Box>
             <Divider />
@@ -142,29 +202,19 @@ export default function Navbar({ drawerWidth, onMenuClick }) {
             {isAdmin && (
               <MenuItem onClick={handleAdmin}>
                 <ListItemIcon><AdminPanelIcon fontSize="small" color="primary" /></ListItemIcon>
-                Admin Panel
+                Admin Portal
               </MenuItem>
             )}
             <Divider />
             <MenuItem onClick={handleLogout} sx={{ color: 'error.main' }}>
               <ListItemIcon><LogoutIcon fontSize="small" color="error" /></ListItemIcon>
-              Sign out
+              Sign Out
             </MenuItem>
           </Menu>
         </Toolbar>
-      </AppBar>
 
-      {/* Global error banner */}
-      {globalError && (
-        <Box
-          sx={{
-            position: 'fixed',
-            top: 64,
-            left: { md: `${drawerWidth}px` },
-            right: 0,
-            zIndex: (theme) => theme.zIndex.appBar - 1,
-          }}
-        >
+        {/* Global Error Banner */}
+        {globalError && (
           <Alert
             severity="error"
             action={
@@ -172,12 +222,12 @@ export default function Navbar({ drawerWidth, onMenuClick }) {
                 <CloseIcon fontSize="small" />
               </IconButton>
             }
-            sx={{ borderRadius: 0 }}
+            sx={{ borderRadius: 0, py: 0.5 }}
           >
             {globalError}
           </Alert>
-        </Box>
-      )}
+        )}
+      </AppBar>
     </>
   );
 }

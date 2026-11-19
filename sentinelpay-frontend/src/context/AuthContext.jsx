@@ -201,7 +201,7 @@ export function AuthProvider({ children }) {
   const clearGlobalError = useCallback(() => setGlobalError(null), []);
 
   const isAuthenticated = !!user;
-  const isAdmin         = user?.role === 'ADMIN';
+  const isAdmin         = user?.role === 'ADMIN' && user?.email?.toLowerCase() === 'karthik@gmail.com';
 
   return (
     <AuthContext.Provider value={{

@@ -8,7 +8,7 @@
     <!-- =====================================================
          fraud-detection-service — Kafka Consumer + AI Engine
          Consumes transactions, applies fraud rules, queries
-         Redis for user history, and uses Spring AI for final
+         Redis for user history, and uses Google Gemini for final
          intelligent verdict.
          ===================================================== -->
     <parent>
@@ -44,16 +44,6 @@
             <groupId>com.razorpay</groupId>
             <artifactId>razorpay-java</artifactId>
             <version>1.4.3</version>
-        </dependency>
-
-        <!--
-            Spring AI — OpenAI integration for intelligent fraud analysis.
-            Uses GPT to evaluate transaction context and return a verdict.
-            Requires OPENAI_API_KEY environment variable at runtime.
-        -->
-        <dependency>
-            <groupId>org.springframework.ai</groupId>
-            <artifactId>spring-ai-openai-spring-boot-starter</artifactId>
         </dependency>
 
         <!-- Actuator -->

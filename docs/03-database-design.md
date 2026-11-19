@@ -79,20 +79,21 @@ Immutable audit log of every debit/credit. Used for idempotency checks.
 ```sql
 CREATE TABLE bank_transactions (
     id              BIGINT          NOT NULL AUTO_INCREMENT,
-    transaction_id  VARCHAR(255)    NOT NULL,  -- from TransactionEvent.transactionId
-    account_id      BIGINT          NOT NULL,  -- FK → bank_accounts.id
+    transaction_id  VARCHAR(64)     NOT NULL,  -- from TransactionEvent.transactionId
     type            ENUM('DEBIT','CREDIT','REFUND') NOT NULL,
+    user_id         VARCHAR(255)    NOT NULL,  -- account affected by this entry
     amount          DECIMAL(15,2)   NOT NULL,
     balance_after   DECIMAL(15,2)   NOT NULL,
-    created_at      DATETIME        NOT NULL,
+    applied_at      DATETIME        NOT NULL,
 
     PRIMARY KEY (id),
-    UNIQUE KEY uk_tx_txid_type (transaction_id, type),  -- idempotency key
-    FOREIGN KEY (account_id) REFERENCES bank_accounts(id)
+    UNIQUE KEY uk_bank_tx_id_type (transaction_id, type),  -- idempotency key
+    KEY idx_bank_tx_user_applied_at (user_id, applied_at)
 );
 ```
 
 **Idempotency:** The `(transaction_id, type)` unique constraint ensures a debit or credit for a given transaction can only be recorded once. If a Kafka message is replayed (at-least-once delivery), the duplicate operation is silently ignored.
+**Account history:** `GET /bank/transactions` uses `user_id` from the gateway-authenticated identity and returns the latest 100 entries ordered by `applied_at`; each account has its own DEBIT/CREDIT view of a completed payment.
 
 ---
 
@@ -119,6 +120,16 @@ Value: {
   "analyzedAt": "2025-04-08 14:23:01"
 }
 ```
+
+### Payer Review Decisions
+
+```
+Key:   fraud:review:{transactionId}
+Value: JSON-serialised ReviewDecision
+TTL:   FRAUD_RESULT_TTL_HOURS (same as fraud result)
+```
+
+For a REVIEW verdict, the payer can approve or cancel the specific attempt. `APPROVE` is an audited, explicit override of the automated hold and invokes the simulated BANK debit/credit path without changing the stored fraud verdict; `CANCEL` moves no funds. A successful approved payment is stored in the normal payment record and bank ledger.
 
 ### Payment Records
 

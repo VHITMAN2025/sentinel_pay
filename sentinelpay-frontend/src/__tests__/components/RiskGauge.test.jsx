@@ -34,6 +34,13 @@ describe('RiskGauge', () => {
     expect(screen.getByText('100%')).toBeInTheDocument();
   });
 
+  test('shows unavailable rather than a fabricated zero score', () => {
+    render(<RiskGauge score={null} />);
+    expect(screen.getByText('—')).toBeInTheDocument();
+    expect(screen.getByText('UNAVAILABLE')).toBeInTheDocument();
+    expect(screen.queryByText('0%')).not.toBeInTheDocument();
+  });
+
   test('has accessible role and label', () => {
     const { container } = render(<RiskGauge score={0.75} />);
     const svg = container.querySelector('svg');

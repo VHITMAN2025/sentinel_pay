@@ -19,6 +19,9 @@ public interface BankAccountRepository extends JpaRepository<BankAccount, Long> 
     /** Look up account by UPI ID — used for payee resolution */
     Optional<BankAccount> findByUpiId(String upiId);
 
+    /** Look up account by generated account number */
+    Optional<BankAccount> findByAccountNumber(String accountNumber);
+
     boolean existsByUserId(String userId);
 
     boolean existsByUpiId(String upiId);

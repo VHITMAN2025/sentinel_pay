@@ -46,6 +46,7 @@ export function AppStateProvider({ children }) {
   const [alerts,       setAlerts]       = useState([]);  // AlertEvent[]
   const [unreadAlerts, setUnreadAlerts] = useState(0);
   const [stats,        dispatchStats]   = useReducer(statsReducer, statsInitial);
+  const [balanceRefreshKey, setBalanceRefreshKey] = useState(0);
 
   // ── Add completed transaction to history ────────────────────────────────────
   const recordTransaction = useCallback((txRecord) => {
@@ -101,6 +102,10 @@ export function AppStateProvider({ children }) {
     setUnreadAlerts(0);
   }, []);
 
+  const refreshBalance = useCallback(() => {
+    setBalanceRefreshKey((key) => key + 1);
+  }, []);
+
   // ── Push a real alert from SSE or polling ────────────────────────────────────
   /**
    * Called by AlertsPanel when an SSE event or polling result delivers
@@ -150,8 +155,9 @@ export function AppStateProvider({ children }) {
   return (
     <AppStateContext.Provider value={{
       txHistory, stats,
+      balanceRefreshKey,
       alerts, unreadAlerts,
-      recordTransaction, markAlertsRead,
+      recordTransaction, markAlertsRead, refreshBalance,
       pushAlert, pushSimulatedAlert, clearAppState,
     }}>
       {children}

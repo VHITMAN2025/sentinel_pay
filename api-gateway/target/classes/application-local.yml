@@ -68,11 +68,76 @@ spring:
           filters:
             - StripPrefix=0
 
+        # Bank UPI PIN management (PROTECTED)
+        - id: bank-pin
+          uri: http://localhost:8084
+          predicates:
+            - Path=/bank/pin/**
+          filters:
+            - StripPrefix=0
+
+        # Authenticated user's own persisted bank ledger
+        - id: bank-transactions
+          uri: http://localhost:8084
+          predicates:
+            - Path=/bank/transactions
+          filters:
+            - StripPrefix=0
+
+        # Bank account lookup by UPI ID (PROTECTED) — payee resolution for UPI payments
+        - id: bank-account-by-upi
+          uri: http://localhost:8084
+          predicates:
+            - Path=/bank/account/by-upi/**
+          filters:
+            - StripPrefix=0
+
+        # Razorpay payment verification + webhook (PUBLIC — browser redirect target)
+        - id: razorpay-verify
+          uri: http://localhost:8082
+          predicates:
+            - Path=/api/razorpay/**
+          filters:
+            - StripPrefix=0
+
+        # Admin User Management (PROTECTED - karthik@gmail.com only)
+        - id: admin-users
+          uri: http://localhost:8083
+          predicates:
+            - Path=/api/admin/users/**
+          filters:
+            - StripPrefix=0
+
+        # Admin Bank Operations (PROTECTED - karthik@gmail.com only)
+        - id: admin-bank
+          uri: http://localhost:8084
+          predicates:
+            - Path=/api/admin/bank/**
+          filters:
+            - StripPrefix=0
+
+        # Admin Fraud & Risk Operations (PROTECTED - karthik@gmail.com only)
+        - id: admin-fraud
+          uri: http://localhost:8082
+          predicates:
+            - Path=/api/admin/fraud/**
+          filters:
+            - StripPrefix=0
+
+        # Admin System Operations (PROTECTED - karthik@gmail.com only)
+        - id: admin-system
+          uri: http://localhost:8082
+          predicates:
+            - Path=/api/admin/system/**
+          filters:
+            - StripPrefix=0
+
       globalcors:
         corsConfigurations:
           '[/**]':
             allowedOriginPatterns:
               - "http://localhost:3000"
+              - "http://localhost:3001"
             allowedMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
             allowedHeaders: ["*"]
             exposedHeaders: ["Authorization", "X-Trace-Id"]
